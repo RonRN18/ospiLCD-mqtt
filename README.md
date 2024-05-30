@@ -129,6 +129,17 @@ The osAddress must be set to your OpenSprinkler IP address, and this address mus
 
 Similarly, if you're running the MQTT server on the Raspberry Pi as we did in these instructions, the defaults for the MQTT settings shown above will work fine. You can use the either address identified earlier, or you can use 127.0.0.1, refering to the local Raspberry Pi. If you're running the MQTT server elsewhere, or if you're using another MQTT server or cloud service, enter the address and port for that service here. 
 
+## MD5Hash of OSPi web interface password
+If you have changed the default OSPi web interface password from the default of "opendoor", you will need to change "md5hash" on line# 39. To find the md5hash, you can open `hashpass.py` with a text editor (nano, vi, vim) and change the word "opendoor" with your new password between the double-quotation marks. You will then need to make `hashpass.py` executable by typing: 
+
+    $ chmod +x hashpass.py
+
+Now, execute the edited hashpass.py file by typing:
+
+    $ ./hashpass.py
+
+This will output the new md5hash of the new password. Replace the original md5hash with this new version on line# 39 of `ospiLCD-mqtt.py`.
+
 ## 6. Run ospiLCD-mqtt.py
 Now we're all ready to to run:
 
