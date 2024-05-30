@@ -3,48 +3,80 @@
 """
 ospiLCD-mqtt.py
 OpenSprinkler status display, MQTT enabled
-https://github.com/sirkus7/ospiLCD-mqtt
+
+Ron Webb's Update: https://github.com/RonRN18/ospiLCD-mqtt
+As of May 29, 2024, this is NOT complete but is a work in progress to 
+overcome changes in both Python and MQTT since the previous script was
+written. I am also including a few additional comments to help clarify
+things.
+
+Forked from: https://github.com/sirkus7/ospiLCD-mqtt
 Based on original project by Stanley https://github.com/stanoba/ospiLCD
-Version: 0.7
+Version: 0.8
 """
 
 import signal
 import sys
 import time
+import random
 from threading import Timer
 import json
 import locale
 from collections import namedtuple
+from random import randint
 from time import *
 from RPLCD import i2c
 from subprocess import check_output
 import netifaces
 import paho.mqtt.client as mqtt
-from urllib2 import urlopen # For Python3: from urllib.request import urlopen	
+from urllib.request import urlopen # For Python3: from urllib.request import urlopen	
 
 ################ Configuration Parameters ####################
+
 # Set OpenSprinkler system info (address, port, password hash)
-osAddress = "ospi.lan"  # IP Address or hostname of the opensprinkler system
-osPort = 8080  
-md5hash = "a6d82bced638de3def1e9bbb4983225c"  # OpenSprinkler password MD5 hash (default opendoor)
+osAddress = "127.0.0.1"  # IP Address or hostname of the opensprinkler system
+osPort = 8080 # Port for OSPi web interface
+md5hash = "3ba8d41df27605cdf38d74fd0bcda08d"  # OpenSprinkler password MD5 hash (default opendoor)
+
+
 # Set MQTT info (defaults to localhost, if MQTT server is running on Pi)
-mqttAddress = "127.0.0.1"
-mqttPort   = "1883"
+mqttAddress = "172.19.20.88" # MQTT Broker IP address
+mqttPort   = 1883 # MQTT Broker TCP port
+user = "mqtt-user" # MQTT Client Username
+password ="testing" # MQTT Client Password
+topic = "opensprinkler/#" # Subscribe to the topic, receive any messages published on it
+client_id = f'python-mqtt-{random.randint(0, 1000)}' # Assigns a random integer for client session ID
+
+
 # Set I2C LCD Info
 LCD_i2c_expander = 'PCF8574'  # PCF8574 (default, ebay), MCP23008 (used in Adafruit I2C LCD backpack) or MCP23017
 LCD_i2c_address = 0x27  # LCD I2C address (default 0x27)
 LCD_cols = 20  # LCD columns (16 or 20)
 LCD_rows = 4   # LCD rows (2 or 4)
 backlight_timeout = 60.0 # Float, seconds to keep display lit after showing data before dimming. 0.0" Disables, keeps backlight on at all times. 
+
+
 # Set Raspberry Pi System Info
 date_locale = 'en_US.UTF-8'  # Set to your Raspberry pi locale eg. 'en_GB.UTF-8' or 'it_IT.UTF-8'
-net_iface = 'wlan0' # Set to network interface used for communication (eg. wlan0, eth0)
+net_iface = 'eth0' # Set to network interface used for communication (eg. wlan0, eth0)
 
 """
+
+#!/usr/bin/env python
+
 # Use this snippet of code to generate the md5hash value for your OpenSprinkler password
-import md5
-md5hash=md5.new('opendoor').hexdigest()
-print(md5hash)
+# If you have changed the OSPi web interface password, replace "opendoor" (the default password)
+# with the new password. Place all of this text between the triple double-quote marks into a new
+# file, such as "hashpass.py" and once written, make it executable  (chmod +x hashpass.py) and 
+# then execute it (i.e. "./hashpass.py". The hash is an encoded, fixed length equivelant of a
+# password that is extremely difficult, if not impossible to reverse. You will replace the current
+# string of characters in the "ospiLCD-mqtt.py" line that starts off with "md5hash = ".
+
+import hashlib
+
+m=hashlib.md5(b"opendoor") 
+print(m.hexdigest())
+ 
 """
 
 ################################################
@@ -59,9 +91,9 @@ def signal_handler(sig, frame):
 	print('Exiting.')
 	sys.exit(0)
 
-def mqtt_connect(client, userdata, flags, rc):
+def mqtt_connect(client, userdata, flags, rc, properties):
 	print("[Connected with result code {0}]".format(str(rc))) # For debugging MQTT connect message
-	client.subscribe("opensprinkler/#")  # Subscribe to the topic, receive any messages published on it
+	client.subscribe(topic)  
 	lcd.backlight_enabled = True
 	lcd.cursor_pos = (0, 0)
 	lcd.write_string("MQTT Connected\r\nReqesting info")
@@ -251,8 +283,13 @@ lcd.clear()
 lcd.write_string("Connecting to\r\nMQTT broker...")
 
 # === Setup MQTT client, actions ===
-client = mqtt.Client()  
-client.on_connect = mqtt_connect  
-client.on_message = mqtt_message  
+client = mqtt.Client(client_id=client_id, callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+
+client.on_connect = mqtt_connect
+client.on_message = mqtt_message
+#client.tls_set()  # <--- even without arguments
+client.username_pw_set(user,password)
+
 client.connect(mqttAddress, mqttPort, 60)
 client.loop_forever()
+
