@@ -56,7 +56,7 @@ Install [RPLCD](https://pypi.python.org/pypi/RPLCD/), netifaces, and paho-mqtt l
 Install ospiLCD script from github:
 
     $ cd /home/pi/
-    $ wget https://raw.githubusercontent.com/sirkus7/ospiLCD-mqtt/master/ospiLCD-mqtt.py
+    $ wget https://github.com/RonRN18/ospiLCD-mqtt/blob/master/ospiLCD-mqtt.py
     $ chmod +x ospiLCD-mqtt.py
 
 ## 3. Setup a MQTT "broker" (server)
@@ -97,22 +97,33 @@ Edit the `ospiLCD-mqtt.py` file:
 Find the "Configuration Parameters" section near the beginning of the file, and set these appropriately for your setup. 
 ```python
 ################ Configuration Parameters ####################
+
 # Set OpenSprinkler system info (address, port, password hash)
-osAddress = "ospi.lan"  # IP Address or hostname of the opensprinkler system
-osPort = 8080  
-md5hash = "a6d82bced638de3def1e9bbb4983225c"  # OpenSprinkler password MD5 hash (default opendoor)
+osAddress = "127.0.0.1"  # IP Address or hostname of the opensprinkler system
+osPort = 8080 # Port for OSPi web interface
+md5hash = "3ba8d41df27605cdf38d74fd0bcda08d"  # OpenSprinkler password MD5 hash (default opendoor)
+
+
 # Set MQTT info (defaults to localhost, if MQTT server is running on Pi)
-mqttAddress = "127.0.0.1"
-mqttPort   = "1883"
+mqttAddress = "172.19.20.88" # MQTT Broker IP address
+mqttPort   = 1883 # MQTT Broker TCP port
+user = "mqtt-user" # MQTT Client Username
+password ="testing" # MQTT Client Password
+topic = "opensprinkler/#" # Subscribe to the topic, receive any messages published on it
+client_id = f'python-mqtt-{random.randint(0, 1000)}' # Assigns a random integer for client session ID
+
+
 # Set I2C LCD Info
 LCD_i2c_expander = 'PCF8574'  # PCF8574 (default, ebay), MCP23008 (used in Adafruit I2C LCD backpack) or MCP23017
 LCD_i2c_address = 0x27  # LCD I2C address (default 0x27)
 LCD_cols = 20  # LCD columns (16 or 20)
 LCD_rows = 4   # LCD rows (2 or 4)
 backlight_timeout = 60.0 # Float, seconds to keep display lit after showing data before dimming. 0.0" Disables, keeps backlight on at all times. 
+
+
 # Set Raspberry Pi System Info
 date_locale = 'en_US.UTF-8'  # Set to your Raspberry pi locale eg. 'en_GB.UTF-8' or 'it_IT.UTF-8'
-net_iface = 'wlan0' # Set to network interface used for communication (eg. wlan0, eth0)
+net_iface = 'eth0' # Set to network interface used for communication (eg. wlan0, eth0)
 ```
 The osAddress must be set to your OpenSprinkler IP address, and this address must be accessable to your Raspberry Pi. If you're running 'ospiLCD-mqtt.py' on the OpenSprinkler Pi, then you can set this address to "127.0.0.1" refering to itself. 
 
