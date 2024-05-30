@@ -2,7 +2,7 @@
 
 ## History
 
- When buying my latest [OpenSprinkler Pi](https://opensprinkler.com) for my current home, I noticed that they no longer provide a case option. The suggest a [case]([OpenSprinkler-Hardware/OSPi/enclsoure/3Dprint at master · OpenSprinkler/OpenSprinkler-Hardware · GitHub](https://github.com/OpenSprinkler/OpenSprinkler-Hardware/tree/master/OSPi/enclsoure/3Dprint)) to print, but I decided to look for another design. Along the way, I noticed [Stanley's](https://github.com/stanoba/ospiLCD) design that included a 20x4 LCD with code. This intrigued me and I thought I could design something that appealed to me more.
+ When buying my latest [OpenSprinkler Pi](https://opensprinkler.com) for my current home, I noticed that they no longer provide a case option. The suggest a [case](https://github.com/OpenSprinkler/OpenSprinkler-Hardware/tree/master/OSPi/enclsoure/3Dprint)) to print, but I decided to look for another design. Along the way, I noticed [Stanley's](https://github.com/stanoba/ospiLCD) design that included a 20x4 LCD with code. This intrigued me and I thought I could design something that appealed to me more.
 
 ## Why I use OpenSCAD
 
