@@ -36,7 +36,7 @@ from urllib.request import urlopen # For Python3: from urllib.request import url
 # Set OpenSprinkler system info (address, port, password hash)
 osAddress = "127.0.0.1"  # IP Address or hostname of the opensprinkler system
 osPort = 8080 # Port for OSPi web interface
-md5hash = "3ba8d41df27605cdf38d74fd0bcda08d"  # OpenSprinkler password MD5 hash (default opendoor)
+md5hash = "a6d82bced638de3def1e9bbb4983225c"  # OpenSprinkler password MD5 hash (default opendoor)
 
 
 # Set MQTT info (defaults to localhost, if MQTT server is running on Pi)
