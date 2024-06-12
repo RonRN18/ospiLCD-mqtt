@@ -27,6 +27,8 @@ import paho.mqtt.client as mqtt
 
 
 # Global Variables
+
+######################### User Variables #########################
 osAddress = "127.0.0.1"  # OpenSprinkler address (default 127.0.0.1)
 osPort = 8080  # OpenSprinkler port (default 8080)
 md5hash = "a6d82bced638de3def1e9bbb4983225c"  # OpenSprinkler password MD5 hash (default opendoor)
@@ -37,6 +39,8 @@ LCD_rows = 4  # LCD rows (2 or 4)
 date_locale = (
     "en_US.UTF-8"  # Set to your Raspberry pi locale eg. 'en_GB.UTF-8' or 'it_IT.UTF-8'
 )
+
+
 client_id = f"python-mqtt-{random.randint(0, 1000)}"  # MQTT requires a unique client ID for every client connection
 backlight_timeout = 60.0  # Float, seconds to keep display lit after showing data before dimming. 0.0" Disables, keeps backlight on at all times.
 api_url = f"http://{osAddress}:{osPort}/ja?pw={md5hash}"  # This URL provides OpenSprinkler's latest settings/status in JSON format
