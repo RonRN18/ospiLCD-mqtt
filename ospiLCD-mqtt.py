@@ -14,7 +14,6 @@ https://github.com/stanoba/ospiLCD
 
 import configparser
 import locale
-import random
 import signal
 import socket
 import sys
@@ -217,14 +216,14 @@ def signal_handler(_sig, _frame):
 ######################### OpenSprinkler API #########################
 
 
-def get_data():
+def get_data(timeout=5):
     """
     Retrieve the current OpenSprinkler state from the JSON API.
     """
     try:
         response = requests.get(
             api_url,
-            timeout=5,
+            timeout=timeout,
         )
 
         response.raise_for_status()
@@ -982,17 +981,53 @@ def load_initial_opensprinkler_data():
     """
     Retrieve the initial OpenSprinkler data.
 
+    OpenSprinkler Pi may take several seconds after boot before its
+    HTTP API is fully ready. Retry temporary connection failures
+    before giving up.
+
+    Authentication failures are not retried because they require a
+    configuration change.
+
     Return the data dictionary on success, or None on failure.
     """
-    try:
-        return get_data()
+    retry_interval = 2
+    max_attempts = 30
 
-    except (
-        OpenSprinklerAuthenticationError,
-        OpenSprinklerConnectionError,
-    ) as e:
-        show_opensprinkler_error(e)
-        return None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return get_data(timeout=2)
+
+        except OpenSprinklerAuthenticationError as e:
+            show_opensprinkler_error(e)
+            return None
+
+        except OpenSprinklerConnectionError as e:
+            print(
+                f"OpenSprinkler not ready " f"(attempt {attempt}/{max_attempts}): {e}"
+            )
+
+            show_error(
+                "OpenSprinkler",
+                "Starting up...",
+                f"Retry {attempt}/{max_attempts}",
+                "Please wait",
+                wake=True,
+            )
+
+            if attempt < max_attempts:
+                time.sleep(retry_interval)
+
+    show_error(
+        "OpenSprinkler",
+        "Not responding",
+        "Check service",
+        "and network",
+        wake=True,
+    )
+
+    print("OpenSprinkler did not become available " "within the startup retry period.")
+
+    return None
 
 
 def initialize_mqtt(ja):
