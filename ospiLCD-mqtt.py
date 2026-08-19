@@ -99,7 +99,7 @@ date_locale = config.get(
     fallback="en_US.UTF-8",
 )
 
-client_id = f"python-mqtt-{random.randint(0, 1000)}"
+client_id = f"ospiLCD-mqtt-{socket.gethostname()}"
 
 api_url = f"http://{osAddress}:{osPort}/ja?pw={md5hash}"
 
