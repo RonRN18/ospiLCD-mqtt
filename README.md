@@ -1,246 +1,674 @@
-# ospiLCD-mqtt.py
+# ospiLCD-mqtt
 
-ospiLCD-mqtt is an OpenSpinkler montior that displays the system's status on an LCD display as sprinkler events occur. The script can be run on the OpenSprinkler controller itself (if it is the Pi version) to provide a display on the device, or it can be run on a separate Rasperry Pi to provide a remote status display, as shown below. 
+`ospiLCD-mqtt` provides an LCD status display for OpenSprinkler using a Raspberry Pi and an I2C character LCD.
 
-*Example status display, run on a Raspberry Pi Zero W*
-![Example status display, run from Rasbperry Pi Zero W](img/ospiLCD-mqtt-RPi0w.jpg)
+The program can run directly on an OpenSprinkler Pi (OSPi), providing an LCD on the controller itself, or on a separate Raspberry Pi as a remote OpenSprinkler status display.
 
-**Features:**
+![Example status display, run from Raspberry Pi Zero W](img/ospiLCD-mqtt-RPi0w.jpg)
 
-* 16x2 and 20x4 I2C LCDs are supported (PCF8574T based, with some minor changes MCP23008 is supported too)
-* The first two display lines are identical to LCD on OpenSprinkler 2.x (with icons)
-* Third and fourth lines display information based on ospi status (remaining watering time, water level in %, E1 stations status)
-* Efficient, LCD updates immediately when a status change occurs on the OpenSprinkler system (e.g. a station starts/ends) with no contininous polling of the API.
-* LCD backlight can be configured to be on all the time, or to automatically turn on when showing a new status then turn off after a configurable timeout. 
-* Can be used as remote OpenSprinkler LCD display, or directly on a OpenSprinklerPi system to provide an on-system display. 
-* Runs well on all current Raspberry Pis (2, 3, 4, Zero W)
+## Features
 
-<img align="right" src="img/ospilcd9sm.jpg" alt="4 line display, built into OpenSprinkler Pi, using Stanley's build"> This project is based on code from Stanley's excellent build at https://github.com/stanoba/ospiLCD. Please refer to his project for designs for 3D printed case, pcb designs, and other build tips. *(Shown to the right, a _4 line LCD status display, built into OpenSprinkler Pi, using Stanley's build)*
+* Supports common 16x2 and 20x4 I2C character LCDs using the RPLCD library.
+* Supports PCF8574-based LCD backpacks. Other RPLCD-supported expanders may also work with configuration changes.
+* Displays OpenSprinkler controller and station status using icons similar to the OpenSprinkler 2.x LCD.
+* On a 20x4 display, additional lines show information such as:
+  * Watering level
+  * Remaining watering time
+  * Expansion-board station status
+  * Raspberry Pi network address
+* Uses MQTT notifications from OpenSprinkler for immediate display updates when something changes.
+* Also performs a periodic OpenSprinkler API refresh as a synchronization fallback.
+* Updates the LCD clock once per second without continuously polling the OpenSprinkler API.
+* Configurable LCD backlight timeout.
+* Can run directly on an OpenSprinkler Pi or on another Raspberry Pi on the network.
+* Runs continuously as a systemd service.
+* User configuration is stored separately from the Python program, so updating the project does not overwrite local settings.
 
-This ospiLCD-mqtt version makes two functional changes from the original ospiLCD project that are important to note up front:
+---
 
-* It subscribes to an MQTT server to receive immediate notifications of OpenSprinkler events, then uses the OpenSprinkler API to gather current data.
-* Rather than a "one shot" script that runs from a cron job, this script runs ongoing in a service loop, responding to events as needed. 
+## Project History
 
-There are two general parts to setting up ospiLCD-mqtt and getting it running:
+This project is based on Stanley's original [`ospiLCD`](https://github.com/stanoba/ospiLCD) project and the subsequent [`ospiLCD-mqtt`](https://github.com/sirkus7/ospiLCD-mqtt) fork.
 
-1. Setting up the Rasperry Pi with the LCD display and the software
-2. Setting up MQTT notifications
+Stanley's project includes useful information about 3D-printed enclosures, PCB designs, wiring, and other hardware considerations.
 
-The sections below walk through the steps for setting these up. 
+<img align="right" src="img/ospilcd9sm.jpg" alt="4-line LCD display built into OpenSprinkler Pi using Stanley's design">
 
-# Setup and Installation
+The MQTT version differs from the original `ospiLCD` design in two important ways:
 
-## 1. Installing the LCD Display
+1. It runs continuously rather than being launched periodically by cron.
+2. It subscribes to OpenSprinkler MQTT events so that changes can be displayed immediately.
 
-Use an I2C LCD display module supported by the RPLCD library. Details about what display modules are supported, and how to wire the LCD to the Raspberry Pi are well documented in the [RPLCD library docs, here.](https://rplcd.readthedocs.io/en/stable/getting_started.html) 
+MQTT is used as a notification mechanism. When OpenSprinkler publishes an event, `ospiLCD-mqtt` receives the notification and queries the OpenSprinkler API for the current authoritative state.
 
-If you would like to install directly onto the OpenSprinkler Rasbperry Pi, follow [Stanley's instructions, here](https://github.com/stanoba/ospiLCD.)
+The current version also performs a full status refresh every 30 seconds as a synchronization fallback. The clock itself is updated locally every second without making an OpenSprinkler API request.
 
-## 2. Installing the Display Software
+---
 
-Starting with a recent installation of Raspbian or Raspbian Light, here are steps to install the libraries and code needed:
+# Requirements
 
-First, configure the Raspberry Pi to connect to your network, which needs have access to the OpenSprinkler system and the MQTT server you will be using. 
+You will need:
 
- Then use `apt` to install pip, smbus, and i2c tools:
+* A Raspberry Pi running a current Raspberry Pi OS release.
+* Python 3 with virtual-environment support.
+* An OpenSprinkler system accessible over the network.
+* MQTT configured in OpenSprinkler.
+* An MQTT broker accessible by both OpenSprinkler and the Raspberry Pi running `ospiLCD-mqtt`.
+* A supported I2C character LCD.
 
-    $ sudo apt update
-    $ sudo apt upgrade -y
-    $ sudo apt install python-pip python-smbus i2c-tools
+This project is currently being developed and tested on:
 
-Install [RPLCD](https://pypi.python.org/pypi/RPLCD/) and paho-mqtt libraries using pip (**Note:** at this time, paho-mqtt needs to be older than 2.0, hence the "<2.0.0" for that command):
+* Raspberry Pi 2 Model B
+* Raspberry Pi OS 13 (Trixie)
+* Python 3.13
+* OpenSprinkler Pi
 
-    $ sudo pip3 install RPLCD
-    $ sudo pip3 install "paho-mqtt<2.0.0"
+Other Raspberry Pi models and Raspberry Pi OS versions should work, but may not have been tested with the current release.
 
-Install ospiLCD script from github:
+---
 
-    $ cd /home/pi/
-    $ wget https://github.com/RonRN18/ospiLCD-mqtt/blob/master/ospiLCD-mqtt.py
-    $ chmod +x ospiLCD-mqtt.py
+# 1. Install and Connect the LCD
 
-## 3. Setup a MQTT "broker" (server)
+Use an I2C character LCD supported by the RPLCD library.
 
-OpenSprinkler has built in support for MQTT, which is a lightweight messaging protocol used by many IoT devices to communicate status and updates. There are a number of popular cloud based MQTT services available that you could use, if you don't want to run your own. Or, you can easily run an MQTT server on your Raspberry Pi, or a Linux system on your network. If you would like to use a cloud based MQTT broker, skip this section and proceed to the next section. 
+RPLCD documentation:
 
-Install the "mosquitto" MQTT broker on your Rasbperry Pi (or another Linux system on the network.)
+https://rplcd.readthedocs.io/en/stable/getting_started.html
 
-    $ sudo apt install mosquitto
+For information about installing an LCD directly into an OpenSprinkler Pi enclosure, also see Stanley's original project:
 
-The installation should automatically start the mosquitto MQTT broker service, as well as create service startup scripts to ensure it starts up on system boot. Quite helpful.
+https://github.com/stanoba/ospiLCD
 
-To double check that mosquitto process is running, you can use `ps`:
+A common configuration is:
 
-    $ ps -e | grep mosquitto 
-    10806 ?        00:00:00 mosquitto
+* 20 columns
+* 4 rows
+* PCF8574T I2C backpack
+* I2C address `0x27`
 
-Now, you need to get the IP address of your new MQTT broker in order to tell your OpenSprinkler system where to find it. You can get this using the following command:
+Your hardware may be different.
 
-    $ hostname -I
+## Enable I2C
 
-Take note of the first part of the resonse, the IPv4 address of your Raspberry Pi, so you can ou'll use this to configure your OpenSprinkler system.
+I2C must be enabled on the Raspberry Pi.
 
-## 4. Configure OpenSprinkler System to use MQTT
+On Raspberry Pi OS, this can normally be done with:
 
-In the OpenSprinker UI, configure the MQTT server (broker) information. Do this by clicking on the multi square icon in the bottom right, and choosing "Edit Options", then select the "Integration" section (shown below, left). Find MQTT and click "Tap to Configure" next to it. 
+```bash
+sudo raspi-config
+```
 
-| 1: OpenSprinkler Edit Options, Integration           | 2: MQTT Settings                          |
-| ---------------------------------------------------- | ----------------------------------------- |
+Select:
+
+```text
+Interface Options
+    → I2C
+        → Enable
+```
+
+Reboot if requested.
+
+You can verify that the I2C interface exists with:
+
+```bash
+ls -l /dev/i2c*
+```
+
+To scan I2C bus 1 for connected devices:
+
+```bash
+i2cdetect -y 1
+```
+
+For example, an LCD backpack using address `0x27` should produce an entry similar to:
+
+```text
+     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+20: -- -- -- -- -- -- -- 27 -- -- -- -- -- -- -- --
+```
+
+---
+
+# 2. Configure an MQTT Broker
+
+OpenSprinkler has built-in MQTT support.
+
+`ospiLCD-mqtt` does **not** require that the MQTT broker run on the same Raspberry Pi. It only requires that both OpenSprinkler and `ospiLCD-mqtt` can reach the broker.
+
+If you already have an MQTT broker, you can use it and skip to the next section.
+
+One option for running a local broker is Mosquitto:
+
+```bash
+sudo apt install mosquitto
+```
+
+The exact Mosquitto security and authentication configuration is beyond the scope of this project. Current Mosquitto installations may require additional configuration before accepting remote clients.
+
+---
+
+# 3. Configure MQTT in OpenSprinkler
+
+In the OpenSprinkler web interface:
+
+1. Open **Edit Options**.
+2. Select **Integration**.
+3. Find **MQTT**.
+4. Select **Tap to Configure**.
+
+| OpenSprinkler Integration Settings | MQTT Settings |
+| --- | --- |
 | ![Edit Options, Integration](img/OS-EditOptions.png) | ![MQTT Options](img/OS-MQTT_settings.png) |
 
-Fill in the IP address of the MQTT server (shown above, right). If you're using the mosquitto server, the default port is 1883. If your server requires username and passowrd, enter it. The default mosquitto server described above doesn't require any -- you can leave them blank.
+Configure:
 
-Click submit, and return to the main screen. 
+* MQTT broker hostname or IP address
+* MQTT port
+* Username, if required
+* Password, if required
 
-## 5. Configure ospiLCD-mqtt.py
+The standard non-TLS MQTT port is commonly `1883`.
 
-Edit the `ospiLCD-mqtt.py` file:
-    $ nano ospiLCD-mqtt.py
+Submit the settings and return to the OpenSprinkler main screen.
 
-Find the "User Variables" section near the beginning of the file, and set these appropriately for your setup. 
+---
 
-```python
-######################### User Variables #########################
-osAddress = "127.0.0.1"  # OpenSprinkler address (default 127.0.0.1)
-osPort = 8080  # OpenSprinkler port (default 8080)
-md5hash = "a6d82bced638de3def1e9bbb4983225c"  # OpenSprinkler password MD5 hash (default opendoor)
-LCD_i2c_expander = "PCF8574"  # PCF8574 (default, ebay), MCP23008 (used in Adafruit I2C LCD backpack) or MCP23017
-LCD_i2c_address = 0x27  # LCD I2C address (default 0x27)
-LCD_cols = 20  # LCD columns (16 or 20)
-LCD_rows = 4  # LCD rows (2 or 4)
-date_locale = (
-    "en_US.UTF-8"  # Set to your Raspberry pi locale eg. 'en_GB.UTF-8' or 'it_IT.UTF-8'
-)
-```
+# 4. Download ospiLCD-mqtt
 
-The osAddress must be set to your OpenSprinkler IP address, and this address must be accessable to your Raspberry Pi. If you're running 'ospiLCD-mqtt.py' on the OpenSprinkler Pi, then you can set this address to "127.0.0.1" refering to itself. 
-
-The lines that start off with "LCD" will need to be altered if you are using a different LCD panel than I have used, such as a 16-character per line or 2-line display. I am using a 20-character by 4-line display. The controller of my panel is a PCF8574, purchased from [Amazon](https://www.amazon.com/gp/product/B0C1G9GBRZ).
-
-## MD5Hash of OSPi web interface password
-
-If you have changed the default OSPi web interface password from the default of "opendoor", you will need to change "md5hash" on line# 39. To find the md5hash, you can open `hashpass.py` with a text editor (nano, vi, vim) and change the word "opendoor" with your new password between the double-quotation marks. You will then need to make `hashpass.py` executable by typing: 
-
-    $ chmod +x hashpass.py
-
-Now, execute the edited hashpass.py file by typing:
-
-    $ ./hashpass.py
-
-This will output the new md5hash of the new password. Replace the original md5hash with this new version on line# 39 of `ospiLCD-mqtt.py`.
-
-## 6. Run ospiLCD-mqtt.py
-
-Now we're all ready to to run:
-
-    $ ./ospiLCD-mqtt.py
-
-## Troubleshooting
-
-When `ospiLCD-mqtt.py` is run, the the LCD Screen should should light, briefly indicating it is subscribing to OpenSpinkler messages on the MQTT server:
-
-    Connecting to
-    MQTT broker...
-
-If it cannot connect to the MQTT server, it will stay on this message indefinately. In this case, check the MQTT server settings in `ospiLCD-mqtt.py`and then try again.
-
-If it successfully connects to the MQTT broker, it will display the following message:
-
-    MQTT Connected
-    Requesting Info
-
-If it stays on this message, this means it either cannot connect to and query the OpenSprinkler system API, or the OpenSprinkler system is not able to connect to the MQTT server. In this case, double check the MQTT related parameters in your OpenSprinkler system, and then try again. 
-
-If all is successful, the above messages will only be shown briefly as it successfully subscribes to MQTT messages, queries the OpenSprinkler status, and then formats and displays the status LCD display, such as below: 
-
-![20x4 lcd status display](img/ospilcd5sm.jpg)
-
-
-
-
-
-# Running as a Service
-
-Obviously, once you get the script functioning properly, you do not want to log in and start a Python script every time the device is rebooted or loses power. In order to get this script to start automatically, it needs to be started as a systemd service. Again, ***make sure the script is working before creating and starting the service.*** 
-
-The first step is to create the service file. I've called mine `/etc/systemd/system/ospilcd.service`.  I have used **nano** as my text editor:
-
-
+Clone this repository into the location where you want the project installed:
 
 ```bash
-$ sudo nano /etc/systemd/system/ospilcd.service
+git clone https://github.com/RonRN18/ospiLCD-mqtt.git
+cd ospiLCD-mqtt
 ```
 
-Place the following in the file:
+The project **does not assume** that your username is `pi` or that the repository is located in `/home/pi`.
+
+The installer determines the user and installation directory from the environment in which it is run.
+
+---
+
+# 5. Run the Installer
+
+Run:
 
 ```bash
-[Unit]
-Description=OpenSprinkler Pi LCD
-After=network.target
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=1
-User=pi
-WorkingDirectory=/home/pi
-ExecStart=/usr/bin/python /home/pi/ospiLCD-mqtt.py
-
-[Install]
-WantedBy=multi-user.target
+./install.sh
 ```
 
-This service file *assumes* that you are using the default Raspbian username of `pi` and that you placed the `ospiLCD-mqtt.py` in your home directory. If you have changed anything from my assumption, change the `User`, `WorkingDirectory`, and `ExecStart` lines accordingly. 
+Do **not** run the entire installer with `sudo`.
 
-Once you have saved and exited your text editor, you will need to do the following to enable and start the service. 
+The installer will request `sudo` privileges for individual system-level operations when needed.
+
+The installer:
+
+* Installs required Raspberry Pi OS packages.
+* Checks that `/dev/i2c-1` exists.
+* Creates a Python virtual environment in `.venv`.
+* Installs the Python dependencies listed in `requirements.txt`.
+* Creates `ospilcd.ini` from `ospilcd.ini.example` if a local configuration does not already exist.
+* Creates a systemd service using your actual username and project directory.
+* Does **not** overwrite an existing `ospilcd.ini`.
+
+This last point is important when updating the project: your local configuration remains separate from the code stored in Git.
+
+---
+
+# 6. Configure ospiLCD-mqtt
+
+After installation, edit:
 
 ```bash
-$ sudo systemctl daemon-reload
-$ sudo systemctl enable ospilcd.service
-$ sudo systemctl start ospilcd.service
+nano ospilcd.ini
 ```
 
-To verify if the service is running, you can type:
+The file contains comments describing each option.
+
+A typical configuration looks like:
+
+```ini
+[OpenSprinkler]
+
+# IP address or hostname of the OpenSprinkler controller.
+# If this script is running directly on the OpenSprinkler Pi,
+# 127.0.0.1 is normally appropriate.
+address = 127.0.0.1
+
+# OpenSprinkler web/API port.
+port = 8080
+
+# MD5 hash of the OpenSprinkler password.
+password_hash = 3ba8d41df27605cdf38d74fd0bcda08d
+
+
+[LCD]
+
+# I2C expander used by the LCD backpack.
+i2c_expander = PCF8574
+
+# I2C address of the LCD backpack.
+i2c_address = 0x27
+
+# LCD dimensions.
+columns = 20
+rows = 4
+
+# Number of seconds to leave the backlight on after an event.
+# See ospilcd.ini.example for current behavior and options.
+backlight_timeout = 60
+
+
+[Regional]
+
+# Locale used for date/time formatting.
+locale = en_US.UTF-8
+```
+
+Do not edit `ospilcd.ini.example` for your local settings. It is the example configuration distributed with the project and may change in future versions.
+
+Your actual:
+
+```text
+ospilcd.ini
+```
+
+is excluded from Git by `.gitignore`.
+
+Therefore:
 
 ```bash
-$ systemctl status ospilcd.service
+git pull
 ```
 
-An example output, to let you know it is working is:
+can update the program without normally replacing your local configuration.
+
+---
+
+## OpenSprinkler Address
+
+If `ospiLCD-mqtt` is running directly on the same Raspberry Pi as OpenSprinkler Pi, normally use:
+
+```ini
+address = 127.0.0.1
+```
+
+If the display is running on a separate Raspberry Pi, use the hostname or IP address of the OpenSprinkler controller.
+
+For example:
+
+```ini
+address = 192.168.1.50
+```
+
+The Raspberry Pi running `ospiLCD-mqtt` must be able to reach that address.
+
+---
+
+## OpenSprinkler Password Hash
+
+The OpenSprinkler API uses the MD5 hash of the OpenSprinkler password.
+
+The repository includes `hashpass.py` to assist with generating this value.
+
+Edit `hashpass.py` as necessary and run:
 
 ```bash
-● ospilcd.service - OpenSprinkler Pi LCD
-     Loaded: loaded (/etc/systemd/system/ospilcd.service; enabled; vendor prese>
-     Active: active (running) since Wed 2024-06-12 09:48:11 PDT; 2h 9min ago
-   Main PID: 804 (python)
-      Tasks: 4 (limit: 1595)
-        CPU: 51.883s
-     CGroup: /system.slice/ospilcd.service
-             └─804 /usr/bin/python /home/bigron/ospiLCD-mqtt.py
-
-Jun 12 11:55:09 OSPi python[804]: Msg:opensprinkler/availability: b'online'
-
+./hashpass.py
 ```
 
-If you have made any mistakes in creating the service file and you re-edit the file, upon saving and quitting your text editor, run:
+Place the resulting hash in:
+
+```ini
+password_hash = YOUR_HASH_HERE
+```
+
+### Important note for OpenSprinkler Pi users
+
+Some OpenSprinkler Pi firmware update/reinstallation procedures may reset the OpenSprinkler password to the default:
+
+```text
+opendoor
+```
+
+If you normally use a different password, remember to restore your preferred OpenSprinkler password after updating the firmware.
+
+Otherwise, `ospiLCD-mqtt` may stop being able to query the OpenSprinkler API because the hash in `ospilcd.ini` no longer matches the controller password.
+
+---
+
+# 7. Test the Program
+
+Before relying on the systemd service, it can be useful to run the program interactively.
+
+Activate the virtual environment:
 
 ```bash
-$ sudo systemctl daemon-reload
-$ sudo systemctl restart ospilcd.service
+source .venv/bin/activate
 ```
 
-### *Notes about my script*
+Then run:
 
-I know my programming skills are not the greatest but I needed to rework many things that no longer worked with Sirkus7's original version of this. I was getting rude, belittling responses when questioning "experts" in the Python forums on how to make changes. At least [ChatGPT](https://chatgpt.com/) did not give me an attitude! While there were flaws in code generated in ChatGPT, I was able to learn concepts from their examples. I realize that my code may not be as elegant as it could, but it at least is working for me. 
+```bash
+python ospiLCD-mqtt.py
+```
 
-I spoke with Ray from [OpenSprinkler](https://opensprinkler.com) about adding LCD support into the OSPi version and he mentioned that he would like to eventually have it built into the OSPi version, like it is in the microcontroller version, but there are a few hurdles that need to be made before this happens. The rest of the OpenSprinkler firmware is written in C++ as opposed to Python and if the LCD support could be built into the main OpenSprinkler firmware, that would make this project obsolete and *that* would make me very happy. At this time, with my current settings, my LCD is refreshed every 30 seconds and the whole screen flashes with each refresh. With it built into the OpenSprinkler firmware, the display should always be live and not flash. 
+A successful MQTT connection should produce output similar to:
 
+```text
+[Connected with result code Success]
+Msg:opensprinkler/availability: b'online'
+10:41:20 Wed 08-19
+MC:________
+Water level:128%
+192.168.1.50
+```
 
+Press `Ctrl+C` to stop the interactive test.
+
+---
+
+# 8. Start the systemd Service
+
+The installer creates the systemd service using the username and project path detected during installation.
+
+Start it with:
+
+```bash
+sudo systemctl start ospilcd
+```
+
+Check its status:
+
+```bash
+systemctl status ospilcd --no-pager
+```
+
+A working installation should report:
+
+```text
+Active: active (running)
+```
+
+To view recent service messages:
+
+```bash
+journalctl -u ospilcd -n 50 --no-pager
+```
+
+Once you have confirmed that the service works, enable automatic startup at boot:
+
+```bash
+sudo systemctl enable ospilcd
+```
+
+You can also enable and start it in one command:
+
+```bash
+sudo systemctl enable --now ospilcd
+```
+
+---
+
+# How the Display Updates Work
+
+The current version uses three complementary mechanisms.
+
+## MQTT — immediate event updates
+
+OpenSprinkler publishes MQTT messages when events occur.
+
+When `ospiLCD-mqtt` receives one of these messages, it immediately queries the OpenSprinkler API and updates the display.
+
+This avoids waiting for the next polling interval when, for example, a station starts or stops.
+
+## Periodic synchronization — every 30 seconds
+
+A single background task performs a complete API refresh every 30 seconds.
+
+This acts as a synchronization fallback and keeps time-dependent OpenSprinkler information current even when no MQTT event occurs.
+
+## Clock — every second
+
+The first LCD line is updated once per second using the Raspberry Pi system clock.
+
+This update does **not** query OpenSprinkler and does not generate MQTT traffic.
+
+The result is a continuously updating clock without continuously polling the OpenSprinkler API.
+
+Routine display updates write complete LCD rows rather than clearing and redrawing the entire display, reducing the flashing/flickering seen in older versions.
+
+---
+
+# LCD Backlight
+
+The backlight can be configured with:
+
+```ini
+backlight_timeout = 60
+```
+
+An OpenSprinkler event wakes the backlight and restarts the timeout.
+
+Periodic synchronization and once-per-second clock updates continue while the backlight is off without continually turning it back on.
+
+---
+
+# Updating ospiLCD-mqtt
+
+Because local configuration is stored in the Git-ignored `ospilcd.ini`, normal project updates should not require re-entering your settings.
+
+From the project directory:
+
+```bash
+git pull
+```
+
+If `requirements.txt` has changed, update the Python environment with:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Then restart the service:
+
+```bash
+sudo systemctl restart ospilcd
+```
+
+Check:
+
+```bash
+systemctl status ospilcd --no-pager
+```
+
+### OpenSprinkler firmware updates
+
+Updating **OpenSprinkler itself** is separate from updating `ospiLCD-mqtt`.
+
+If an OpenSprinkler Pi firmware update resets your OpenSprinkler password, restore the intended password afterward or update the hash in `ospilcd.ini`.
+
+If the LCD stops displaying current OpenSprinkler information immediately after an OpenSprinkler firmware update, checking the OpenSprinkler password is a good first troubleshooting step.
+
+---
+
+# Troubleshooting
+
+## LCD is powered but displays no information
+
+First verify that I2C is enabled:
+
+```bash
+ls -l /dev/i2c*
+```
+
+Then scan the bus:
+
+```bash
+i2cdetect -y 1
+```
+
+Verify that the detected address matches:
+
+```ini
+i2c_address =
+```
+
+in `ospilcd.ini`.
+
+A common address is:
+
+```text
+0x27
+```
+
+but your LCD may use another address.
+
+---
+
+## `ModuleNotFoundError`
+
+Make sure you are using the project's virtual environment.
+
+Instead of:
+
+```bash
+python3 ospiLCD-mqtt.py
+```
+
+use:
+
+```bash
+source .venv/bin/activate
+python ospiLCD-mqtt.py
+```
+
+or directly:
+
+```bash
+.venv/bin/python ospiLCD-mqtt.py
+```
+
+Dependencies can be reinstalled with:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+---
+
+## MQTT does not connect
+
+Verify the MQTT configuration in the OpenSprinkler web interface and verify that the broker is reachable from the Raspberry Pi.
+
+The display may initially show:
+
+```text
+Connecting to
+MQTT broker...
+```
+
+A successful connection should briefly show:
+
+```text
+MQTT Connected
+Requesting info
+```
+
+---
+
+## MQTT connects but OpenSprinkler data does not appear
+
+Verify:
+
+```ini
+[OpenSprinkler]
+address =
+port =
+password_hash =
+```
+
+If running directly on the OpenSprinkler Pi, try:
+
+```ini
+address = 127.0.0.1
+```
+
+Also verify that the password hash corresponds to the OpenSprinkler controller's **current** password.
+
+---
+
+## Service will not start
+
+Check:
+
+```bash
+systemctl status ospilcd --no-pager
+```
+
+and:
+
+```bash
+journalctl -u ospilcd -n 50 --no-pager
+```
+
+If you manually change the systemd service file, reload systemd before restarting:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ospilcd
+```
+
+---
+
+# Configuration Files
+
+| File | Purpose |
+| --- | --- |
+| `ospiLCD-mqtt.py` | Main program |
+| `ospilcd.ini.example` | Example/documented configuration |
+| `ospilcd.ini` | Your local configuration; not tracked by Git |
+| `requirements.txt` | Python dependencies |
+| `install.sh` | Installation helper |
+| `hashpass.py` | Utility for generating the OpenSprinkler password hash |
+| `.gitignore` | Prevents local configuration and virtual environment from being committed |
+| `.gitattributes` | Ensures shell scripts retain Unix line endings |
+
+---
+
+# Notes About This Project
+
+This project began as a practical attempt to add a useful LCD display to OpenSprinkler Pi.
+
+The OpenSprinkler firmware itself is written primarily in C++, and integrating LCD support directly into the firmware would ultimately be preferable. Native integration could react directly to internal OpenSprinkler state without requiring a separate Python process, MQTT notifications, and API requests.
+
+Until such functionality exists in OpenSprinkler Pi itself, this project provides a practical alternative.
+
+The current Python implementation minimizes unnecessary work by using MQTT for immediate event notification, a relatively infrequent API synchronization interval, and a lightweight local clock update.
+
+If OpenSprinkler Pi eventually gains native LCD support and makes this project obsolete, that would be a welcome outcome.
+
+---
+
+# Credits
+
+This project builds upon the work of:
+
+* Stanley's `ospiLCD`:
+  https://github.com/stanoba/ospiLCD
+* sirkus7's `ospiLCD-mqtt`:
+  https://github.com/sirkus7/ospiLCD-mqtt
+
+Thanks to the OpenSprinkler project and the developers of RPLCD and Eclipse Paho MQTT.
+
+---
 
 # Helpful References
 
-* Stanley's ospiLCD project: https://github.com/stanoba/ospiLCD
-* RPLCD Library Documentation: https://rplcd.readthedocs.io/en/stable/index.html
-* Open Sprinkler API Documentation: https://openthings.freshdesk.com/support/solutions/articles/5000716363-os-api-documents
+* Stanley's ospiLCD project:
+  https://github.com/stanoba/ospiLCD
+* RPLCD documentation:
+  https://rplcd.readthedocs.io/en/stable/
+* OpenSprinkler API documentation:
+  https://openthings.freshdesk.com/support/solutions/articles/5000716363-os-api-documents
+* OpenSprinkler:
+  https://opensprinkler.com/
