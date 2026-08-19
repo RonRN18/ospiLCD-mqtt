@@ -202,17 +202,43 @@ def signal_handler(sig, frame):
 
 ######################### OpenSprinkler API #########################
 
+class OpenSprinklerAuthenticationError(Exception):
+    pass
+
+
+class OpenSprinklerConnectionError(Exception):
+    pass
 
 def get_data():
     """
     Retrieve the current OpenSprinkler state from the JSON API.
     """
-    response = requests.get(
-        api_url,
-        timeout=5,
-    )
+    try:
+        response = requests.get(
+            api_url,
+            timeout=5,
+        )
 
-    os_data = response.json()
+        response.raise_for_status()
+
+    except requests.RequestException as e:
+        raise OpenSprinklerConnectionError(
+            f"Unable to connect to OpenSprinkler: {e}"
+        ) from e
+
+    try:
+        os_data = response.json()
+
+    except requests.JSONDecodeError as e:
+        raise OpenSprinklerConnectionError(
+            "OpenSprinkler returned an invalid JSON response."
+        ) from e
+
+    if "settings" not in os_data:
+        raise OpenSprinklerAuthenticationError(
+            "OpenSprinkler API authentication failed. "
+            "Check the password hash in ospilcd.ini."
+        )
 
     settings = os_data.get("settings", {})
     options = os_data.get("options", {})
@@ -235,7 +261,6 @@ def get_data():
 
     device_name = settings.get("dname")
 
-    # These values are in "options" in current OpenSprinkler firmware.
     den = options.get("den")
     mas = options.get("mas")
     mas2 = options.get("mas2")
@@ -307,18 +332,55 @@ def update_clock():
         if stop_event.wait(delay):
             break
 
+def show_error(line1, line2="", line3="", line4="", wake=True):
+    """
+    Display an error message on the LCD.
+    """
+    if wake:
+        wake_backlight()
+
+    with lcd_lock:
+        lcd.cursor_pos = (0, 0)
+        lcd.write_string(format_lcd_line(line1))
+
+        if LCD_rows >= 2:
+            lcd.cursor_pos = (1, 0)
+            lcd.write_string(format_lcd_line(line2))
+
+        if LCD_rows >= 3:
+            lcd.cursor_pos = (2, 0)
+            lcd.write_string(format_lcd_line(line3))
+
+        if LCD_rows >= 4:
+            lcd.cursor_pos = (3, 0)
+            lcd.write_string(format_lcd_line(line4))
 
 def periodic_refresh():
-    """
-    Perform one complete OpenSprinkler/API refresh every 30 seconds.
-
-    MQTT still provides immediate event-driven refreshes. This periodic
-    refresh keeps time-dependent and other state synchronized even when
-    MQTT is quiet.
-    """
     while not stop_event.wait(30):
         try:
             update_display(wake=False)
+
+        except OpenSprinklerAuthenticationError as e:
+            print(e)
+
+            show_error(
+                "OpenSprinkler",
+                "Login failed",
+                "Check password",
+                "in ospilcd.ini",
+                wake=True,
+            )
+
+        except OpenSprinklerConnectionError as e:
+            print(e)
+
+            show_error(
+                "OpenSprinkler",
+                "Connection failed",
+                "Check address",
+                "and network",
+                wake=True,
+            )
 
         except Exception as e:
             print(f"Periodic display refresh failed: {e}")
@@ -738,7 +800,34 @@ with lcd_lock:
 
 ######################### MQTT Setup #########################
 
-ja = get_data()
+try:
+    ja = get_data()
+
+except OpenSprinklerAuthenticationError as e:
+    print(e)
+
+    show_error(
+        "OpenSprinkler",
+        "Login failed",
+        "Check password",
+        "in ospilcd.ini",
+        wake=True,
+    )
+
+    sys.exit(1)
+
+except OpenSprinklerConnectionError as e:
+    print(e)
+
+    show_error(
+        "OpenSprinkler",
+        "Connection failed",
+        "Check address",
+        "and network",
+        wake=True,
+    )
+
+    sys.exit(1)
 
 user = ja["mqtt_user"]
 password = ja["mqtt_password"]
