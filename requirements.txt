@@ -1,0 +1,4 @@
+paho-mqtt==2.1.0
+requests==2.34.2
+RPLCD==1.4.0
+smbus2==0.6.1

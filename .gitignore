@@ -1,3 +1,6 @@
 # Local ospiLCD configuration
 # This file contains installation-specific settings and should not be committed.
 ospilcd.ini
+
+# Python virtual environment
+.venv/
