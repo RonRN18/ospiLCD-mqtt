@@ -13,7 +13,6 @@ import requests
 import socket
 import signal
 import random
-import paho.mqtt
 import threading
 import time
 import sys
@@ -116,16 +115,19 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-def mqtt_connect(client, userdata, flags, rc):
+def mqtt_connect(client, userdata, flags, reason_code, properties):
     print(
-        "[Connected with result code {0}]".format(str(rc))
-    )  # For debugging MQTT connect message
-    client.subscribe(
-        "opensprinkler/#"
-    )  # Subscribe to the topic, receive any messages published on it
+        "[Connected with result code {0}]".format(str(reason_code))
+    )
+
+    if reason_code.is_failure:
+        print(f"MQTT connection failed: {reason_code}")
+        return
+
+    client.subscribe("opensprinkler/#")
     lcd.backlight_enabled = True
     lcd.cursor_pos = (0, 0)
-    lcd.write_string("MQTT Connected\r\nReqesting info")
+    lcd.write_string("MQTT Connected\r\nRequesting info")
 
 
 def cycle_mqtt_message(client, userdata, msg):
@@ -471,10 +473,10 @@ mqttPort = ja[
 ]  # Acquires MQTT Broker's port number from OpenSprinkler setup
 
 
-if paho.mqtt.__version__[0] > "1":
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
-else:
-    client = mqtt.Client()
+client = mqtt.Client(
+    callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+    client_id=client_id,
+)
 client.on_connect = mqtt_connect
 client.on_message = cycle_mqtt_message
 client.username_pw_set(user, password)
