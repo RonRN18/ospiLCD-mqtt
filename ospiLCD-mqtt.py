@@ -5,27 +5,23 @@ ospiLCD-mqtt.py
 OpenSprinkler status display, MQTT enabled
 https://github.com/RonRN18/ospiLCD-mqtt
 Based on sirkus7's build at https://github.com/sirkus7/ospiLCD-mqtt
-
 """
-import json
+
+import configparser
 import locale
-import requests
-import socket
-import signal
 import random
+import signal
+import socket
+import sys
 import threading
 import time
-import sys
-from os import system
-from threading import Timer
-from time import sleep
-from time import *
-from random import randint
-from RPLCD import i2c
-from subprocess import check_output
-import paho.mqtt.client as mqtt
-import configparser
 from pathlib import Path
+from threading import Timer
+from time import localtime, strftime
+
+import paho.mqtt.client as mqtt
+import requests
+from RPLCD import i2c
 
 
 ######################### Configuration #########################
@@ -102,60 +98,126 @@ client_id = f"python-mqtt-{random.randint(0, 1000)}"
 api_url = f"http://{osAddress}:{osPort}/ja?pw={md5hash}"
 
 
-# Function defs
+######################### Globals #########################
+
+lcd = None
+
+lcd_lock = threading.Lock()
+update_lock = threading.Lock()
+timer_lock = threading.Lock()
+stop_event = threading.Event()
+
+dim_timer = None
+
+
+######################### Utility Functions #########################
+
+
+def format_lcd_line(text):
+    """
+    Pad or truncate text so that exactly one LCD row is written.
+
+    Writing a complete row avoids needing to clear the entire display
+    during routine updates and reduces LCD flicker.
+    """
+    return str(text)[:LCD_cols].ljust(LCD_cols)
+
+
+def format_clock_line():
+    """
+    Return the Pi's local time formatted for the first LCD row.
+
+    Example on a 20-column LCD:
+        10:04:27 Wed 08-19
+    """
+    return strftime("%H:%M:%S %a %m-%d", localtime())
+
+
+def reset_backlight_timer():
+    """
+    Restart the timer that turns off the LCD backlight.
+
+    A timeout of 0 or less means leave the backlight on indefinitely.
+    """
+    global dim_timer
+
+    with timer_lock:
+        if dim_timer is not None:
+            dim_timer.cancel()
+
+        dim_timer = None
+
+        if backlight_timeout > 0:
+            dim_timer = Timer(
+                backlight_timeout,
+                dim_backlight,
+            )
+            dim_timer.daemon = True
+            dim_timer.start()
+
+
+def wake_backlight():
+    """
+    Turn on the LCD backlight and restart its timeout timer.
+    """
+    with lcd_lock:
+        lcd.backlight_enabled = True
+
+    reset_backlight_timer()
+
+
+def dim_backlight():
+    """
+    Callback used by the backlight timeout timer.
+    """
+    with lcd_lock:
+        lcd.backlight_enabled = False
+
+    print("[Backlight dimmed.]")
+
+
+######################### Signal Handling #########################
 
 
 def signal_handler(sig, frame):
-    global lcd
+    """
+    Cleanly shut down when Ctrl+C or SIGINT is received.
+    """
     global dim_timer
-    dim_timer.cancel()
-    lcd.backlight_enabled = False
-    lcd.clear()
+
+    stop_event.set()
+
+    with timer_lock:
+        if dim_timer is not None:
+            dim_timer.cancel()
+
+    with lcd_lock:
+        if lcd is not None:
+            lcd.clear()
+            lcd.backlight_enabled = False
+
     print("Exiting.")
     sys.exit(0)
 
 
-def mqtt_connect(client, userdata, flags, reason_code, properties):
-    print(
-        "[Connected with result code {0}]".format(str(reason_code))
-    )
-
-    if reason_code.is_failure:
-        print(f"MQTT connection failed: {reason_code}")
-        return
-
-    client.subscribe("opensprinkler/#")
-    lcd.backlight_enabled = True
-    lcd.cursor_pos = (0, 0)
-    lcd.write_string("MQTT Connected\r\nRequesting info")
-
-
-def cycle_mqtt_message(client, userdata, msg):
-    def run_cycle():
-        while True:
-            mqtt_message(client, userdata, msg)
-            sleep(30)  # Sleep for 30 seconds between cycles
-
-    # Start the cycling in a separate thread to avoid blocking the main thread
-    cycle_thread = threading.Thread(target=run_cycle)
-    cycle_thread.daemon = (
-        True  # This ensures the thread will exit when the main program exits
-    )
-    cycle_thread.start()
-
-
-def mqtt_message(client, userdata, msg):
-    print("Msg:" + msg.topic + ": " + str(msg.payload))  # Debug MQTT messages recieved.
-    update_display()
+######################### OpenSprinkler API #########################
 
 
 def get_data():
+    """
+    Retrieve the current OpenSprinkler state from the JSON API.
+    """
+    response = requests.get(
+        api_url,
+        timeout=5,
+    )
 
-    os = requests.get(api_url).json()
-    settings = os.get("settings", {})
-    options = os.get("options", {})
-    mqtt = settings.get("mqtt", {})
-    status = os.get("status", {})
+    os_data = response.json()
+
+    settings = os_data.get("settings", {})
+    options = os_data.get("options", {})
+    mqtt_settings = settings.get("mqtt", {})
+    status = os_data.get("status", {})
 
     device_time = settings.get("devt")
     device_enabled = settings.get("en")
@@ -164,22 +226,30 @@ def get_data():
     rain_delay = settings.get("rd")
     sunrise = settings.get("sunrise")
     sunset = settings.get("sunset")
-    mqtt_en = mqtt.get("en")
-    mqtt_host = mqtt.get("host")
-    mqtt_port = mqtt.get("port")
-    mqtt_user = mqtt.get("user")
-    mqtt_password = mqtt.get("pass")
+
+    mqtt_en = mqtt_settings.get("en")
+    mqtt_host = mqtt_settings.get("host")
+    mqtt_port = mqtt_settings.get("port")
+    mqtt_user = mqtt_settings.get("user")
+    mqtt_password = mqtt_settings.get("pass")
+
     device_name = settings.get("dname")
+
+    # These values are in "options" in current OpenSprinkler firmware.
     den = options.get("den")
     mas = options.get("mas")
     mas2 = options.get("mas2")
+
     remote_extension = options.get("re")
     sensor1_type = options.get("sn1t")
     water_level = options.get("wl")
+
     status_sn = status.get("sn")
     nstations = status.get("nstations")
-    stations = os.get("stations", {})
+
+    stations = os_data.get("stations", {})
     snames = stations.get("snames")
+
     program_status = settings.get("ps")
 
     return {
@@ -210,151 +280,335 @@ def get_data():
     }
 
 
-def dim_backlight():  # Callback for dim_timer
-    global lcd
-    lcd.backlight_enabled = False
-    print("[Backlight dimmed.]")
+######################### LCD Display #########################
 
 
-def update_display():
-    global lcd
-    global dim_timer
+def update_clock():
+    """
+    Update only the first LCD row once per second.
 
-    # Parse JSON into an object with attributes corresponding to dict keys.
-    ja = get_data()
-    ja_mas = ja["mas"]
-    ja_mas2 = ja["mas2"]
-    ja_sn = ja["status_sn"]
-    ja_nstations = ja["nstations"]
-    ja_den = ja["den"]
-    ja_re = ja["remote_extension"]
-    ja_sn1t = ja["sensor1_type"]
-    ja_rd = ja["rain_delay"]
-    ja_ps = ja["program_status"]
-    ja_devt = ja["device_time"]
-    ja_wl = ja["water_level"]
+    This does not query OpenSprinkler and does not perform any MQTT
+    operations. It simply uses the Raspberry Pi's local system clock.
+    """
+    while not stop_event.is_set():
+        try:
+            line1 = format_clock_line()
 
-    # get all station status
-    mc = ""
-    i = 1
-    for x in range(0, 8):
-        if ja_sn[x] == 0:
-            mc = mc + "_"
-        else:
-            if i == ja_mas:  # MATER 1
-                mc = mc + "M"
-            elif i == ja_mas2:  # MASTER 2
-                mc = mc + "N"
+            with lcd_lock:
+                lcd.cursor_pos = (0, 0)
+                lcd.write_string(format_lcd_line(line1))
+
+        except Exception as e:
+            print(f"Clock update failed: {e}")
+
+        # Sleep until approximately the beginning of the next second.
+        delay = 1.0 - (time.time() % 1.0)
+
+        if stop_event.wait(delay):
+            break
+
+
+def periodic_refresh():
+    """
+    Perform one complete OpenSprinkler/API refresh every 30 seconds.
+
+    MQTT still provides immediate event-driven refreshes. This periodic
+    refresh keeps time-dependent and other state synchronized even when
+    MQTT is quiet.
+    """
+    while not stop_event.wait(30):
+        try:
+            update_display(wake=False)
+
+        except Exception as e:
+            print(f"Periodic display refresh failed: {e}")
+
+
+def update_display(wake=True):
+    """
+    Query OpenSprinkler and update the status portions of the LCD.
+
+    If wake=True, the LCD backlight is turned on and its timeout timer
+    is restarted. MQTT-triggered updates use wake=True.
+
+    The periodic 30-second refresh uses wake=False so it does not
+    continually turn the backlight back on.
+    """
+
+    # Prevent multiple full API/display updates from running at once.
+    with update_lock:
+        ja = get_data()
+
+        ja_mas = ja["mas"]
+        ja_mas2 = ja["mas2"]
+        ja_sn = ja["status_sn"]
+        ja_nstations = ja["nstations"]
+        ja_den = ja["den"]
+        ja_re = ja["remote_extension"]
+        ja_sn1t = ja["sensor1_type"]
+        ja_rd = ja["rain_delay"]
+        ja_ps = ja["program_status"]
+        ja_wl = ja["water_level"]
+
+        ######################### Main Controller Status #########################
+
+        mc = ""
+        station_number = 1
+
+        for x in range(0, 8):
+            if ja_sn[x] == 0:
+                mc += "_"
+
             else:
-                mc = mc + str(i)
-        i += 1
+                if station_number == ja_mas:
+                    mc += "M"
 
-    mc2 = ""
-    a = 9
-    if ja_nstations > 8:
-        for b in range(8, 16):
-            if ja_sn[b] == 0:
-                mc2 = mc2 + "_"
-            else:
-                if a == ja_mas:  # MATER 1
-                    mc2 = mc2 + "M"
-                elif a == ja_mas2:  # MASTER 2
-                    mc2 = mc2 + "N"
+                elif station_number == ja_mas2:
+                    mc += "N"
+
                 else:
-                    mc2 = mc2 + str(a)
-            a += 1
+                    mc += str(station_number)
 
-    # get system status
-    if ja_den == 0:
-        mc = "Disabled!"
-    else:
-        mc = mc + " "
+            station_number += 1
 
-    # get remote extension mode status
-    if ja_re == 1:
-        mc = mc + "\x05"
-    else:
-        mc = mc + " "
+        ######################### Expansion Board Status #########################
 
-    # get sensor (0=none, 1=rain, 2=flow, 3=soil, 240=program switch)
-    if ja_sn1t == 1:
-        if ja_rd == 1:
-            mc = mc + "\x03"
+        mc2 = ""
+        station_number = 9
+
+        if ja_nstations > 8:
+            for x in range(8, 16):
+                if ja_sn[x] == 0:
+                    mc2 += "_"
+
+                else:
+                    if station_number == ja_mas:
+                        mc2 += "M"
+
+                    elif station_number == ja_mas2:
+                        mc2 += "N"
+
+                    else:
+                        mc2 += str(station_number)
+
+                station_number += 1
+
+        ######################### Controller Enabled/Disabled #########################
+
+        if ja_den == 0:
+            mc = "Disabled!"
+
         else:
-            mc = mc + " "
-    elif ja_sn1t == 2:
-        mc = mc + "\x06"
-    elif ja_sn1t == 240:
-        mc = mc + "\x07"
-    else:
-        mc = mc + ""  # Note, currently no icon for 3=soil. (todo)
+            mc += " "
 
-    # check local network status
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect(("8.8.8.8", 80))
-    net_ip = s.getsockname()[0]
-    if len(net_ip) > 7:
-        mc = mc + "\x00"  # Shows WiFi logo
-    else:
-        mc = mc + "\x01"  # Shows WiFi logo with "x" to refer to no network
+        ######################### Remote Extension Status #########################
 
-    # Count remaining watering time
-    totaltime = 0
-    for station in ja_ps:
-        totaltime = totaltime + station[1]
-    r_m, r_s = divmod(totaltime, 60)
-    r_h, r_m = divmod(r_m, 60)
+        if ja_re == 1:
+            mc += "\x05"
 
-    # Define LCD lines 1 & 2
-    locale.setlocale(locale.LC_ALL, date_locale)
-    line1 = strftime("%H:%M %a %m-%d", gmtime(ja_devt))  # device time
-    line2 = "MC:" + mc  # station status
-
-    # 3rd LCD line
-    if ja_nstations > 8:
-        line3 = "E1:" + mc2 + " " + str(ja_wl) + "%"
-    else:
-        line3 = "Water level:" + str(ja_wl) + "%"
-
-    # 4th LCD line
-    if totaltime > 0:
-        line4 = "Rt:%d:%02d:%02d h:m:s" % (r_h, r_m, r_s)  # Remaining watering time
-    else:
-        if len(net_ip) > 7:
-            line4 = "" + net_ip  # internal IP
         else:
-            line4 = "No Network!"
+            mc += " "
 
-    print(line1)
-    print(line2)
-    if LCD_rows == 4:
-        print(line3)
-        print(line4)
+        ######################### Sensor Status #########################
 
-    # Enable backlight to display new message.
-    lcd.backlight_enabled = True
+        # Sensor types:
+        #   0   = none
+        #   1   = rain
+        #   2   = flow
+        #   3   = soil
+        #   240 = program switch
 
-    # Write new information
-    lcd.clear()
-    lcd.write_string(line1)
-    lcd.cursor_pos = (1, 0)
-    lcd.write_string(line2)
-    if LCD_rows == 4:
-        lcd.cursor_pos = (2, 0)
-        lcd.write_string(line3)
-        lcd.cursor_pos = (3, 0)
-        lcd.write_string(line4)
+        if ja_sn1t == 1:
+            if ja_rd == 1:
+                mc += "\x03"
+
+            else:
+                mc += " "
+
+        elif ja_sn1t == 2:
+            mc += "\x06"
+
+        elif ja_sn1t == 240:
+            mc += "\x07"
+
+        # Currently no custom icon for soil sensor type 3.
+
+        ######################### Local Network Status #########################
+
+        net_ip = None
+        network_socket = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_DGRAM,
+        )
+
+        try:
+            network_socket.connect(("8.8.8.8", 80))
+            net_ip = network_socket.getsockname()[0]
+
+        except OSError:
+            net_ip = None
+
+        finally:
+            network_socket.close()
+
+        if net_ip:
+            mc += "\x00"
+
+        else:
+            mc += "\x01"
+
+        ######################### Remaining Watering Time #########################
+
+        total_time = 0
+
+        if ja_ps:
+            for station in ja_ps:
+                total_time += station[1]
+
+        remaining_minutes, remaining_seconds = divmod(
+            total_time,
+            60,
+        )
+
+        remaining_hours, remaining_minutes = divmod(
+            remaining_minutes,
+            60,
+        )
+
+        ######################### Build LCD Rows #########################
+
+        line1 = format_clock_line()
+        line2 = "MC:" + mc
+
+        if ja_nstations > 8:
+            line3 = "E1:" + mc2 + " " + str(ja_wl) + "%"
+
+        else:
+            line3 = "Water level:" + str(ja_wl) + "%"
+
+        if total_time > 0:
+            line4 = "Rt:%d:%02d:%02d h:m:s" % (
+                remaining_hours,
+                remaining_minutes,
+                remaining_seconds,
+            )
+
+        else:
+            if net_ip:
+                line4 = net_ip
+
+            else:
+                line4 = "No Network!"
+
+        ######################### Terminal Debug Output #########################
+
+        print(line1)
+        print(line2)
+
+        if LCD_rows == 4:
+            print(line3)
+            print(line4)
+
+        ######################### Write LCD #########################
+
+        if wake:
+            wake_backlight()
+
+        with lcd_lock:
+            # Do NOT clear the entire LCD here.
+            #
+            # Writing an entire padded row removes old characters while
+            # avoiding the visible flicker caused by lcd.clear().
+
+            lcd.cursor_pos = (0, 0)
+            lcd.write_string(format_lcd_line(line1))
+
+            lcd.cursor_pos = (1, 0)
+            lcd.write_string(format_lcd_line(line2))
+
+            if LCD_rows == 4:
+                lcd.cursor_pos = (2, 0)
+                lcd.write_string(format_lcd_line(line3))
+
+                lcd.cursor_pos = (3, 0)
+                lcd.write_string(format_lcd_line(line4))
 
 
-##################################################################################3
-# Globals
-backlight = True
-dim_timer = ""
-dim_timer = Timer(backlight_timeout, dim_backlight)
+######################### MQTT Callbacks #########################
 
-signal.signal(signal.SIGINT, signal_handler)
+
+def mqtt_connect(
+    client,
+    userdata,
+    flags,
+    reason_code,
+    properties,
+):
+    """
+    Called when the Paho MQTT client connects to the broker.
+    """
+    print(
+        f"[Connected with result code {reason_code}]"
+    )
+
+    if reason_code.is_failure:
+        print(
+            f"MQTT connection failed: {reason_code}"
+        )
+        return
+
+    client.subscribe("opensprinkler/#")
+
+    wake_backlight()
+
+    with lcd_lock:
+        lcd.cursor_pos = (0, 0)
+        lcd.write_string(
+            format_lcd_line("MQTT Connected")
+        )
+
+        lcd.cursor_pos = (1, 0)
+        lcd.write_string(
+            format_lcd_line("Requesting info")
+        )
+
+
+def mqtt_message(
+    client,
+    userdata,
+    msg,
+):
+    """
+    Immediately refresh the OpenSprinkler status whenever an MQTT
+    message is received.
+    """
+    print(
+        "Msg:"
+        + msg.topic
+        + ": "
+        + str(msg.payload)
+    )
+
+    update_display(wake=True)
+
+
+######################### Program Startup #########################
+
+
+# Set the locale once rather than doing so during every display refresh.
+locale.setlocale(
+    locale.LC_TIME,
+    date_locale,
+)
+
+signal.signal(
+    signal.SIGINT,
+    signal_handler,
+)
+
 
 # === Setup the Display ===
+
 lcd = i2c.CharLCD(
     i2c_expander=LCD_i2c_expander,
     address=LCD_i2c_address,
@@ -367,7 +621,9 @@ lcd = i2c.CharLCD(
     backlight_enabled=True,
 )
 
-# Define Custom LCD characters
+
+######################### Custom LCD Characters #########################
+
 i_wific = (
     0b00000,
     0b00000,
@@ -377,7 +633,8 @@ i_wific = (
     0b00101,
     0b00101,
     0b10101,
-)  # Wifi connected icon
+)
+
 i_wifid = (
     0b00000,
     0b10100,
@@ -387,7 +644,8 @@ i_wifid = (
     0b00101,
     0b00101,
     0b10101,
-)  # WiFi disconnected icon
+)
+
 i_usd = (
     0b00000,
     0b00000,
@@ -397,7 +655,8 @@ i_usd = (
     0b10001,
     0b10011,
     0b11110,
-)  # uSD card icon
+)
+
 i_rain = (
     0b00000,
     0b00000,
@@ -407,7 +666,8 @@ i_rain = (
     0b00000,
     0b10101,
     0b10101,
-)  # Rain icon
+)
+
 i_conn = (
     0b00000,
     0b00000,
@@ -417,7 +677,8 @@ i_conn = (
     0b01000,
     0b10000,
     0b00000,
-)  # Connect icon
+)
+
 i_rext = (
     0b00000,
     0b00000,
@@ -427,7 +688,8 @@ i_rext = (
     0b00101,
     0b01001,
     0b11110,
-)  # Remote extension icon
+)
+
 i_flow = (
     0b00000,
     0b00000,
@@ -437,7 +699,8 @@ i_flow = (
     0b11010,
     0b10011,
     0b00000,
-)  # Flow sensor icon
+)
+
 i_psw = (
     0b00000,
     0b11100,
@@ -447,38 +710,84 @@ i_psw = (
     0b10110,
     0b00010,
     0b00111,
-)  # Program switch icon
+)
 
-lcd.create_char(0, i_wific)
-lcd.create_char(1, i_wifid)
-lcd.create_char(2, i_usd)
-lcd.create_char(3, i_rain)
-lcd.create_char(4, i_conn)
-lcd.create_char(5, i_rext)
-lcd.create_char(6, i_flow)
-lcd.create_char(7, i_psw)
 
-lcd.clear()
-lcd.write_string("Connecting to\r\nMQTT broker...")
+with lcd_lock:
+    lcd.create_char(0, i_wific)
+    lcd.create_char(1, i_wifid)
+    lcd.create_char(2, i_usd)
+    lcd.create_char(3, i_rain)
+    lcd.create_char(4, i_conn)
+    lcd.create_char(5, i_rext)
+    lcd.create_char(6, i_flow)
+    lcd.create_char(7, i_psw)
 
-# === Setup MQTT client, actions ===
-ja = get_data()  # Obtains the latest OpenSprinkler settings (in JSON format)
-user = ja["mqtt_user"]  # Acquires the MQTT username from OpenSprinkler setup
-password = ja["mqtt_password"]  # Acquires the MQTT password from OpenSprinkler setup
-mqttAddress = ja[
-    "mqtt_host"
-]  # Acquires the MQTT Broker's host from OpenSprinkler setup
-mqttPort = ja[
-    "mqtt_port"
-]  # Acquires MQTT Broker's port number from OpenSprinkler setup
+    lcd.clear()
+
+    lcd.cursor_pos = (0, 0)
+    lcd.write_string(
+        format_lcd_line("Connecting to")
+    )
+
+    lcd.cursor_pos = (1, 0)
+    lcd.write_string(
+        format_lcd_line("MQTT broker...")
+    )
+
+
+######################### MQTT Setup #########################
+
+ja = get_data()
+
+user = ja["mqtt_user"]
+password = ja["mqtt_password"]
+mqttAddress = ja["mqtt_host"]
+mqttPort = ja["mqtt_port"]
 
 
 client = mqtt.Client(
     callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
     client_id=client_id,
 )
+
 client.on_connect = mqtt_connect
-client.on_message = cycle_mqtt_message
-client.username_pw_set(user, password)
-client.connect(mqttAddress, mqttPort, keepalive=60)
+client.on_message = mqtt_message
+
+client.username_pw_set(
+    user,
+    password,
+)
+
+client.connect(
+    mqttAddress,
+    mqttPort,
+    keepalive=60,
+)
+
+
+######################### Background Threads #########################
+
+# One thread performs a complete API refresh every 30 seconds.
+refresh_thread = threading.Thread(
+    target=periodic_refresh,
+    daemon=True,
+    name="periodic-refresh",
+)
+
+refresh_thread.start()
+
+
+# One lightweight thread updates only the clock once per second.
+clock_thread = threading.Thread(
+    target=update_clock,
+    daemon=True,
+    name="lcd-clock",
+)
+
+clock_thread.start()
+
+
+######################### MQTT Service Loop #########################
+
 client.loop_forever()
