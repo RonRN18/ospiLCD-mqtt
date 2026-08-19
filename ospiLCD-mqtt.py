@@ -23,7 +23,6 @@ import paho.mqtt.client as mqtt
 import requests
 from RPLCD import i2c
 
-
 ######################### Configuration #########################
 
 config_file = Path(__file__).with_name("ospilcd.ini")
@@ -106,6 +105,7 @@ lcd_lock = threading.Lock()
 update_lock = threading.Lock()
 timer_lock = threading.Lock()
 stop_event = threading.Event()
+error_active = threading.Event()
 
 dim_timer = None
 
@@ -202,12 +202,14 @@ def signal_handler(sig, frame):
 
 ######################### OpenSprinkler API #########################
 
+
 class OpenSprinklerAuthenticationError(Exception):
     pass
 
 
 class OpenSprinklerConnectionError(Exception):
     pass
+
 
 def get_data():
     """
@@ -312,30 +314,32 @@ def update_clock():
     """
     Update only the first LCD row once per second.
 
-    This does not query OpenSprinkler and does not perform any MQTT
-    operations. It simply uses the Raspberry Pi's local system clock.
+    The clock pauses while an error message is being displayed.
     """
     while not stop_event.is_set():
         try:
-            line1 = format_clock_line()
+            if not error_active.is_set():
+                line1 = format_clock_line()
 
-            with lcd_lock:
-                lcd.cursor_pos = (0, 0)
-                lcd.write_string(format_lcd_line(line1))
+                with lcd_lock:
+                    lcd.cursor_pos = (0, 0)
+                    lcd.write_string(format_lcd_line(line1))
 
         except Exception as e:
             print(f"Clock update failed: {e}")
 
-        # Sleep until approximately the beginning of the next second.
         delay = 1.0 - (time.time() % 1.0)
 
         if stop_event.wait(delay):
             break
 
+
 def show_error(line1, line2="", line3="", line4="", wake=True):
     """
-    Display an error message on the LCD.
+    Display an error message on the LCD and suspend the live clock.
     """
+    error_active.set()
+
     if wake:
         wake_backlight()
 
@@ -354,6 +358,7 @@ def show_error(line1, line2="", line3="", line4="", wake=True):
         if LCD_rows >= 4:
             lcd.cursor_pos = (3, 0)
             lcd.write_string(format_lcd_line(line4))
+
 
 def periodic_refresh():
     while not stop_event.wait(30):
@@ -400,6 +405,7 @@ def update_display(wake=True):
     # Prevent multiple full API/display updates from running at once.
     with update_lock:
         ja = get_data()
+        error_active.clear()
 
         ja_mas = ja["mas"]
         ja_mas2 = ja["mas2"]
@@ -609,15 +615,22 @@ def mqtt_connect(
     """
     Called when the Paho MQTT client connects to the broker.
     """
-    print(
-        f"[Connected with result code {reason_code}]"
-    )
+    print(f"[Connected with result code {reason_code}]")
 
     if reason_code.is_failure:
-        print(
-            f"MQTT connection failed: {reason_code}"
+        print(f"MQTT connection failed: {reason_code}")
+
+        show_error(
+            "MQTT broker",
+            "Login failed",
+            "Check username",
+            "and password",
+            wake=True,
         )
+
         return
+
+    error_active.clear()
 
     client.subscribe("opensprinkler/#")
 
@@ -625,14 +638,10 @@ def mqtt_connect(
 
     with lcd_lock:
         lcd.cursor_pos = (0, 0)
-        lcd.write_string(
-            format_lcd_line("MQTT Connected")
-        )
+        lcd.write_string(format_lcd_line("MQTT Connected"))
 
         lcd.cursor_pos = (1, 0)
-        lcd.write_string(
-            format_lcd_line("Requesting info")
-        )
+        lcd.write_string(format_lcd_line("Requesting info"))
 
 
 def mqtt_message(
@@ -644,12 +653,7 @@ def mqtt_message(
     Immediately refresh the OpenSprinkler status whenever an MQTT
     message is received.
     """
-    print(
-        "Msg:"
-        + msg.topic
-        + ": "
-        + str(msg.payload)
-    )
+    print("Msg:" + msg.topic + ": " + str(msg.payload))
 
     update_display(wake=True)
 
@@ -788,14 +792,10 @@ with lcd_lock:
     lcd.clear()
 
     lcd.cursor_pos = (0, 0)
-    lcd.write_string(
-        format_lcd_line("Connecting to")
-    )
+    lcd.write_string(format_lcd_line("Connecting to"))
 
     lcd.cursor_pos = (1, 0)
-    lcd.write_string(
-        format_lcd_line("MQTT broker...")
-    )
+    lcd.write_string(format_lcd_line("MQTT broker..."))
 
 
 ######################### MQTT Setup #########################
@@ -848,11 +848,25 @@ client.username_pw_set(
     password,
 )
 
-client.connect(
-    mqttAddress,
-    mqttPort,
-    keepalive=60,
-)
+try:
+    client.connect(
+        mqttAddress,
+        mqttPort,
+        keepalive=60,
+    )
+
+except (OSError, ValueError) as e:
+    print(f"Unable to connect to MQTT broker " f"{mqttAddress}:{mqttPort}: {e}")
+
+    show_error(
+        "MQTT broker",
+        "Connection failed",
+        "Check broker",
+        "and network",
+        wake=True,
+    )
+
+    sys.exit(1)
 
 
 ######################### Background Threads #########################
