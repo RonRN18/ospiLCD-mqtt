@@ -237,8 +237,7 @@ address = 127.0.0.1
 port = 8080
 
 # MD5 hash of the OpenSprinkler password.
-password_hash = 3ba8d41df27605cdf38d74fd0bcda08d
-
+password_hash = a6d82bced638de3def1e9bbb4983225c
 
 [LCD]
 
