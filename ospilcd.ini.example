@@ -1,0 +1,45 @@
+[OpenSprinkler]
+
+# IP address or hostname of the OpenSprinkler controller.
+# If this script is running directly on the OpenSprinkler Pi,
+# 127.0.0.1 is normally appropriate.
+address = 127.0.0.1
+
+# OpenSprinkler web/API port.
+port = 8080
+
+# MD5 hash of the OpenSprinkler password.
+# The default OpenSprinkler password "opendoor" has the hash shown below.
+password_hash = a6d82bced638de3def1e9bbb4983225c
+
+
+[LCD]
+
+# I2C expander used by the LCD backpack.
+# Common value:
+#   PCF8574
+# Other RPLCD-supported expanders may include MCP23008 or MCP23017.
+i2c_expander = PCF8574
+
+# I2C address of the LCD backpack.
+# Common addresses are 0x27 and 0x3F.
+i2c_address = 0x27
+
+# LCD dimensions.
+# Typical values:
+#   16 columns, 2 rows
+#   20 columns, 4 rows
+columns = 20
+rows = 4
+
+# Number of seconds to leave the LCD backlight on after an update.
+backlight_timeout = 60
+
+
+[Regional]
+
+# Locale used to format date/time information.
+# Examples:
+#   en_US.UTF-8
+#   en_GB.UTF-8
+locale = en_US.UTF-8

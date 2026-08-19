@@ -16,6 +16,7 @@ import random
 import paho.mqtt
 import threading
 import time
+import sys
 from os import system
 from threading import Timer
 from time import sleep
@@ -24,28 +25,84 @@ from random import randint
 from RPLCD import i2c
 from subprocess import check_output
 import paho.mqtt.client as mqtt
+import configparser
+from pathlib import Path
 
 
-# Global Variables
+######################### Configuration #########################
 
-######################### User Variables #########################
-osAddress = "127.0.0.1"  # OpenSprinkler address (default 127.0.0.1)
-osPort = 8080  # OpenSprinkler port (default 8080)
-md5hash = "a6d82bced638de3def1e9bbb4983225c"  # OpenSprinkler password MD5 hash (default opendoor)
-LCD_i2c_expander = "PCF8574"  # PCF8574 (default, ebay), MCP23008 (used in Adafruit I2C LCD backpack) or MCP23017
-LCD_i2c_address = 0x27  # LCD I2C address (default 0x27)
-LCD_cols = 20  # LCD columns (16 or 20)
-LCD_rows = 4  # LCD rows (2 or 4)
-date_locale = (
-    "en_US.UTF-8"  # Set to your Raspberry pi locale eg. 'en_GB.UTF-8' or 'it_IT.UTF-8'
+config_file = Path(__file__).with_name("ospilcd.ini")
+
+if not config_file.exists():
+    raise FileNotFoundError(
+        f"Configuration file not found: {config_file}\n"
+        "Copy ospilcd.ini.example to ospilcd.ini and edit it for your system."
+    )
+
+config = configparser.ConfigParser()
+config.read(config_file)
+
+osAddress = config.get(
+    "OpenSprinkler",
+    "address",
+    fallback="127.0.0.1",
 )
 
+osPort = config.getint(
+    "OpenSprinkler",
+    "port",
+    fallback=8080,
+)
 
-client_id = f"python-mqtt-{random.randint(0, 1000)}"  # MQTT requires a unique client ID for every client connection
-backlight_timeout = 60.0  # Float, seconds to keep display lit after showing data before dimming. 0.0" Disables, keeps backlight on at all times.
-api_url = f"http://{osAddress}:{osPort}/ja?pw={md5hash}"  # This URL provides OpenSprinkler's latest settings/status in JSON format
+md5hash = config.get(
+    "OpenSprinkler",
+    "password_hash",
+)
 
-################################################
+LCD_i2c_expander = config.get(
+    "LCD",
+    "i2c_expander",
+    fallback="PCF8574",
+)
+
+LCD_i2c_address = int(
+    config.get(
+        "LCD",
+        "i2c_address",
+        fallback="0x27",
+    ),
+    0,
+)
+
+LCD_cols = config.getint(
+    "LCD",
+    "columns",
+    fallback=20,
+)
+
+LCD_rows = config.getint(
+    "LCD",
+    "rows",
+    fallback=4,
+)
+
+backlight_timeout = config.getfloat(
+    "LCD",
+    "backlight_timeout",
+    fallback=60.0,
+)
+
+date_locale = config.get(
+    "Regional",
+    "locale",
+    fallback="en_US.UTF-8",
+)
+
+client_id = f"python-mqtt-{random.randint(0, 1000)}"
+
+api_url = f"http://{osAddress}:{osPort}/ja?pw={md5hash}"
+
+
 # Function defs
 
 
