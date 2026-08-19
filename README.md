@@ -121,7 +121,7 @@ i2cdetect -y 1
 ```
 
 For example, an LCD backpack using address `0x27` should produce an entry similar to:
-
+![i2cdetect -y 1](img/ospi_i2c.jpg)
 ```text
      0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
 20: -- -- -- -- -- -- -- 27 -- -- -- -- -- -- -- --
