@@ -50,6 +50,32 @@ just to update the clock.
 A 20-column by 4-row LCD is recommended and is the configuration primarily
 used by this project.
 
+## 3D-Printed Case
+
+A custom 3D-printed enclosure for the OSPi and 20x4 LCD is included with this
+project.
+
+The [`Case`](Case/) directory contains:
+
+* Ready-to-print STL files for the top and bottom of the enclosure
+* Parametric OpenSCAD source files
+* Supporting OpenSCAD modules and SVG artwork
+* Photographs of the completed enclosure
+* Additional construction and printing information
+
+The enclosure was designed so that the OSPi remains mounted and connected to
+the field wiring when the cover is removed. Threaded heat-set inserts are used
+for frequently removed screws rather than threading directly into the printed
+plastic.
+
+The current enclosure was designed around an older OSPi v1.52 and the Raspberry
+Pi hardware used in the original installation. Users with newer OSPi or
+Raspberry Pi hardware should verify board dimensions and connector locations
+before printing.
+
+See the [`Case`](Case/) directory for the design files and additional
+information.
+
 ## Software
 
 The installer is intended for Raspberry Pi OS and installs the required system
