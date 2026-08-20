@@ -1,14 +1,28 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-# Use this snippet of code to generate the md5hash value for your OpenSprinkler password
-# If you have changed the OSPi web interface password, replace "opendoor" (the default password)
-# with the new password. Place all of this text between the triple double-quote marks into a new
-# file, such as "hashpass.py" and once written, make it executable  (chmod +x hashpass.py) and 
-# then execute it (i.e. "./hashpass.py". The hash is an encoded, fixed length equivelant of a
-# password that is extremely difficult, if not impossible to reverse. You will replace the current
-# string of characters in the "ospiLCD-mqtt.py" line that starts off with "md5hash = ".
+"""Generate an MD5 password hash for the OpenSprinkler API."""
 
+import getpass
 import hashlib
 
-m=hashlib.md5(b"opendoor") 
-print(m.hexdigest())
+
+def main():
+    """Prompt for an OpenSprinkler password and print its MD5 hash."""
+    password = getpass.getpass("Enter your OpenSprinkler password: ")
+
+    if not password:
+        print("Error: Password cannot be empty.")
+        return
+
+    password_hash = hashlib.md5(
+        password.encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()
+
+    print()
+    print("OpenSprinkler password hash:")
+    print(password_hash)
+
+
+if __name__ == "__main__":
+    main()
