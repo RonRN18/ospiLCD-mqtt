@@ -281,6 +281,7 @@ def get_data(timeout=5):
     settings = os_data.get("settings", {})
     options = os_data.get("options", {})
     status = os_data.get("status", {})
+    stations = os_data.get("stations", {})
     mqtt_settings = settings.get("mqtt", {})
 
     return {
@@ -298,6 +299,7 @@ def get_data(timeout=5):
         "rain_delay": settings.get("rd"),
         "status_sn": status.get("sn"),
         "nstations": status.get("nstations"),
+        "station_names": stations.get("snames", []),
         "program_status": settings.get("ps"),
     }
 
@@ -522,6 +524,29 @@ def calculate_remaining_time(program_status):
     return sum(station[1] for station in program_status)
 
 
+def get_active_station(ja):
+    """
+    Return the station number and name of the first active station.
+
+    Return (None, None) when no station is active.
+    """
+    station_status = ja.get("status_sn") or []
+    station_names = ja.get("station_names") or []
+
+    for index, active in enumerate(station_status):
+        if active:
+            station_number = index + 1
+
+            if index < len(station_names):
+                station_name = station_names[index]
+            else:
+                station_name = f"Station {station_number}"
+
+            return station_number, station_name
+
+    return None, None
+
+
 def format_remaining_time(total_time):
     """
     Convert seconds into hours, minutes, and seconds.
@@ -543,7 +568,7 @@ def format_remaining_time(total_time):
     )
 
 
-def build_display_lines(
+def build_classic_display_lines(
     ja,
     main_status,
     expansion_status,
@@ -551,7 +576,7 @@ def build_display_lines(
     total_time,
 ):
     """
-    Build the logical LCD rows.
+    Build the original compact LCD status layout.
     """
     line1 = format_clock_line()
     line2 = "MC:" + main_status
@@ -570,6 +595,49 @@ def build_display_lines(
             minutes,
             seconds,
         )
+
+    elif net_ip:
+        line4 = net_ip
+
+    else:
+        line4 = "No Network!"
+
+    return (
+        line1,
+        line2,
+        line3,
+        line4,
+    )
+
+
+def build_named_display_lines(
+    ja,
+    net_ip,
+    total_time,
+):
+    """
+    Build the human-readable named-station LCD layout.
+    """
+    line1 = format_clock_line()
+
+    station_number, station_name = get_active_station(ja)
+
+    if station_number is not None:
+        line2 = station_name
+
+        hours, minutes, seconds = format_remaining_time(total_time)
+
+        if hours > 0:
+            line3 = f"Remaining: {hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            line3 = f"Remaining: {minutes}:{seconds:02d}"
+
+    else:
+        line2 = "System idle"
+        line3 = f"Water level: {ja['water_level']}%"
+
+    if display_footer:
+        line4 = display_footer
 
     elif net_ip:
         line4 = net_ip
@@ -629,13 +697,21 @@ def update_display(wake=True):
 
         total_time = calculate_remaining_time(ja["program_status"])
 
-        lines = build_display_lines(
-            ja,
-            main_status,
-            expansion_status,
-            net_ip,
-            total_time,
-        )
+        if display_mode == "named":
+            lines = build_named_display_lines(
+                ja,
+                net_ip,
+                total_time,
+            )
+
+        else:
+            lines = build_classic_display_lines(
+                ja,
+                main_status,
+                expansion_status,
+                net_ip,
+                total_time,
+            )
 
         print_display_lines(lines)
         write_display(lines, wake=wake)
