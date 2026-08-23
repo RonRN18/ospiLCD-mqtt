@@ -1,5 +1,9 @@
 # ospiLCD-mqtt
 
+> **Development branch:** This README describes the `named-display` branch.
+> The new named layout and scrolling behavior are under active testing before
+> being merged into `master`.
+
 `ospiLCD-mqtt` displays the current status of an
 [OpenSprinkler](https://opensprinkler.com/) controller on an I2C character LCD
 connected to a Raspberry Pi.
@@ -154,6 +158,23 @@ sensor, remote-extension, and network indicators used by the earlier display
 design.
 
 ---
+
+## Behavior notes and limitations
+
+The named display is designed primarily for a 20x4 character LCD. Smaller
+displays may operate, but not all information rows will be visible.
+
+Named mode currently displays the first active station reported by
+OpenSprinkler. Installations that intentionally run multiple stations
+simultaneously may therefore see only one active station name and its
+remaining time.
+
+Station-name scrolling and the live remaining-time countdown are maintained
+locally by the Raspberry Pi between OpenSprinkler updates. These local display
+updates do not generate additional MQTT traffic or OpenSprinkler API requests.
+
+OpenSprinkler remains the authoritative source of controller state. MQTT events
+and the periodic 30-second refresh resynchronize the LCD with the controller.
 
 # Requirements
 
