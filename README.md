@@ -11,29 +11,147 @@ OpenSprinkler installations.
 The display can run directly on an OpenSprinkler Pi (OSPi), or on another
 Raspberry Pi that can reach the OpenSprinkler controller over the network.
 
-## What this version does
+Two display layouts are available:
+
+- **Classic mode** preserves the compact controller-oriented status display
+  inherited from earlier versions of `ospiLCD`.
+- **Named mode** provides a more human-readable display using the station names
+  configured in OpenSprinkler.
+
+---
+
+# What this version does
 
 The original `ospiLCD` implementation was essentially a "one shot" script that
 was periodically started by cron.
 
-`ospiLCD-mqtt` instead runs continuously as a systemd service.
+`ospiLCD-mqtt` instead runs continuously as a systemd service and combines
+event-driven OpenSprinkler updates with locally maintained LCD information.
 
-It uses three different update mechanisms:
+It uses several different update mechanisms:
 
-1. **The clock is updated locally every second.**
-   This does not require an OpenSprinkler API request or MQTT message.
+1. **Local display information is updated without polling OpenSprinkler.**
 
-2. **MQTT events trigger immediate status updates.**
+   The clock is maintained locally from the Raspberry Pi's system clock.
+
+   In named display mode, the remaining watering time is also maintained
+   locally between controller updates.
+
+   Long station names are scrolled locally when necessary.
+
+2. **MQTT events trigger immediate controller updates.**
+
    When OpenSprinkler reports an event such as a station starting or stopping,
    `ospiLCD-mqtt` immediately retrieves the current controller state from the
    OpenSprinkler API and updates the LCD.
 
 3. **A full status refresh occurs every 30 seconds.**
+
    This provides a synchronization fallback if an MQTT message is missed or an
    event is not configured for MQTT notification.
 
 This provides a responsive display without continuously polling OpenSprinkler
-just to update the clock.
+for information that can be maintained locally.
+
+---
+
+# Display modes
+
+## Named mode
+
+Named mode is intended to provide useful information at a glance without
+requiring the user to remember which controller output corresponds to a
+particular irrigation area.
+
+A typical idle display on a 20x4 LCD looks similar to:
+
+```text
+09:01:05 Sun 08-23
+System idle
+Water level: 129%
+OSPi.example.tld
+```
+
+When a station is running:
+
+```text
+09:00:05 Sun 08-23
+Backyard/Garden
+Remaining: 1:00
+OSPi.example.tld
+```
+
+The first row displays the local date and time.
+
+The second row displays the OpenSprinkler station name while watering is
+active. When no station is active, it displays `System idle`.
+
+The third row displays a live remaining-time countdown while watering is
+active. When idle, it displays the current OpenSprinkler water level.
+
+The fourth row can contain user-defined text such as a hostname. If no footer
+is configured, the Raspberry Pi's IPv4 address is displayed instead.
+
+### Long station names
+
+Station names are obtained directly from OpenSprinkler's configured station
+names.
+
+Names that fit within the configured LCD width remain stationary.
+
+Names longer than the LCD width automatically scroll so the entire name can be
+read. The beginning and end of the name are held briefly rather than using a
+continuously moving marquee.
+
+For example, on a 20-column LCD:
+
+```text
+Backyard - Strawberr
+ackyard - Strawberri
+ckyard - Strawberries
+```
+
+No fixed station-name length is assumed by the LCD code. Scrolling is based on
+the configured LCD width and the length of the station name returned by
+OpenSprinkler.
+
+### Live countdown
+
+When a station begins running, `ospiLCD-mqtt` obtains its remaining run time
+from OpenSprinkler and establishes a local countdown.
+
+The countdown then updates locally without making an OpenSprinkler API request
+every second.
+
+Periodic API refreshes and MQTT-triggered updates resynchronize the countdown
+with the controller.
+
+## Classic mode
+
+Classic mode retains the compact status layout derived from the earlier
+`ospiLCD` projects.
+
+A typical idle display may look similar to:
+
+```text
+09:01:05 Sun 08-23
+MC:________
+Water level:129%
+192.168.1.100
+```
+
+A running station may appear as:
+
+```text
+09:00:05 Sun 08-23
+MC:1_______
+Water level:129%
+Rt:0:01:00 h:m:s
+```
+
+This mode also retains support for the compact master-station, expansion-board,
+sensor, remote-extension, and network indicators used by the earlier display
+design.
 
 ---
 
@@ -41,11 +159,11 @@ just to update the clock.
 
 ## Hardware
 
-* Raspberry Pi
-* OpenSprinkler or OpenSprinkler Pi controller
-* HD44780-compatible character LCD
-* I2C LCD backpack, typically PCF8574
-* Appropriate wiring between the Raspberry Pi and LCD
+- Raspberry Pi
+- OpenSprinkler or OpenSprinkler Pi controller
+- HD44780-compatible character LCD
+- I2C LCD backpack, typically PCF8574
+- Appropriate wiring between the Raspberry Pi and LCD
 
 A 20-column by 4-row LCD is recommended and is the configuration primarily
 used by this project.
@@ -57,11 +175,11 @@ project.
 
 The [`Case`](Case/) directory contains:
 
-* Ready-to-print STL files for the top and bottom of the enclosure
-* Parametric OpenSCAD source files
-* Supporting OpenSCAD modules and SVG artwork
-* Photographs of the completed enclosure
-* Additional construction and printing information
+- Ready-to-print STL files for the top and bottom of the enclosure
+- Parametric OpenSCAD source files
+- Supporting OpenSCAD modules and SVG artwork
+- Photographs of the completed enclosure
+- Additional construction and printing information
 
 The enclosure was designed so that the OSPi remains mounted and connected to
 the field wiring when the cover is removed. Threaded heat-set inserts are used
@@ -158,6 +276,12 @@ git clone https://github.com/RonRN18/ospiLCD-mqtt.git
 cd ospiLCD-mqtt
 ```
 
+If you specifically want to test the `named-display` development branch:
+
+```bash
+git switch named-display
+```
+
 Run the installer as your **normal user**:
 
 ```bash
@@ -173,15 +297,15 @@ privileges.
 
 `install.sh`:
 
-* Installs required Raspberry Pi OS packages.
-* Verifies that `/dev/i2c-1` exists.
-* Ensures that the current user has access to the I2C interface.
-* Creates a Python virtual environment in `.venv`.
-* Installs the Python packages listed in `requirements.txt`.
-* Performs a Python syntax check.
-* Creates `ospilcd.ini` from `ospilcd.ini.example` if needed.
-* Preserves an existing `ospilcd.ini`.
-* Creates a systemd service using the actual username and project directory.
+- Installs required Raspberry Pi OS packages.
+- Verifies that `/dev/i2c-1` exists.
+- Ensures that the current user has access to the I2C interface.
+- Creates a Python virtual environment in `.venv`.
+- Installs the Python packages listed in `requirements.txt`.
+- Performs a Python syntax check.
+- Creates `ospilcd.ini` from `ospilcd.ini.example` if needed.
+- Preserves an existing `ospilcd.ini`.
+- Creates a systemd service using the actual username and project directory.
 
 The installer does **not** automatically start or enable the service. This
 allows the configuration and LCD to be tested first.
@@ -252,6 +376,9 @@ python hashpass.py
 Enter your OpenSprinkler password when prompted and place the resulting hash in
 `ospilcd.ini`.
 
+The password itself is not echoed while being entered and is not stored by
+`hashpass.py`.
+
 Do not place the plain-text OpenSprinkler password in `ospilcd.ini`.
 
 ---
@@ -281,7 +408,7 @@ The default configuration assumes a 20x4 LCD.
 ## Backlight timeout
 
 `backlight_timeout` specifies how many seconds the LCD backlight remains on
-after activity.
+after activity when automatic backlight shutoff is enabled.
 
 For example:
 
@@ -289,14 +416,93 @@ For example:
 backlight_timeout = 60
 ```
 
-causes the backlight to turn off after approximately 60 seconds without an
-event that wakes it.
+sets the timeout to approximately 60 seconds.
 
-Periodic background status refreshes do not continually wake the backlight.
+Whether the backlight is actually turned off after that interval is controlled
+by `auto_backlight_off` in the `[Display]` section.
 
 ---
 
-# 5. Regional settings
+# 5. Configure display behavior
+
+The `[Display]` section controls the display layout, footer, and automatic
+backlight behavior.
+
+Example:
+
+```ini
+[Display]
+
+mode = named
+footer = OSPi.example.tld
+auto_backlight_off = false
+```
+
+## Display mode
+
+Use:
+
+```ini
+mode = classic
+```
+
+for the original compact controller-status layout.
+
+Use:
+
+```ini
+mode = named
+```
+
+for the human-readable station-name layout.
+
+## Footer
+
+The optional `footer` value specifies fixed text for LCD row 4.
+
+For example:
+
+```ini
+footer = OSPi.example.tld
+```
+
+If `footer` is left blank:
+
+```ini
+footer =
+```
+
+the Raspberry Pi's detected IPv4 address is displayed instead.
+
+Footer text longer than the configured LCD width is truncated.
+
+## Automatic backlight shutoff
+
+To turn the backlight off after the configured `backlight_timeout`:
+
+```ini
+auto_backlight_off = true
+```
+
+To leave the LCD backlight on continuously while the application is running:
+
+```ini
+auto_backlight_off = false
+```
+
+Some common HD44780 I2C backpacks provide only backlight on/off control rather
+than true brightness control. For those displays, automatic backlight shutoff
+means the backlight turns completely off; it is not gradually dimmed.
+
+Activity such as an MQTT-triggered controller change wakes the backlight when
+automatic shutoff is enabled.
+
+Periodic synchronization and local clock/countdown updates do not continually
+wake it.
+
+---
+
+# 6. Regional settings
 
 The display uses the Raspberry Pi's local clock.
 
@@ -318,11 +524,12 @@ date
 
 ---
 
-# 6. Configure MQTT in OpenSprinkler
+# 7. Configure MQTT in OpenSprinkler
 
 MQTT is used as an **event notification mechanism**.
 
 The LCD does not depend on MQTT messages for the actual controller state.
+
 Instead, an MQTT event tells `ospiLCD-mqtt`:
 
 > Something changed. Ask OpenSprinkler for its current state now.
@@ -330,16 +537,16 @@ Instead, an MQTT event tells `ospiLCD-mqtt`:
 `ospiLCD-mqtt` then retrieves the current state through the OpenSprinkler API.
 
 This avoids duplicating controller-state logic in the MQTT message handler and
-also provides an authoritative current state after each event.
+provides an authoritative current state after each event.
 
 Configure MQTT using the OpenSprinkler web interface.
 
 Enter:
 
-* MQTT broker hostname or IP address
-* MQTT broker port
-* MQTT username, if required
-* MQTT password, if required
+- MQTT broker hostname or IP address
+- MQTT broker port
+- MQTT username, if required
+- MQTT password, if required
 
 The OpenSprinkler MQTT publish topic is normally:
 
@@ -359,7 +566,7 @@ in `ospilcd.ini`.
 
 ---
 
-# 7. Enable OpenSprinkler Notification Events
+# 8. Enable OpenSprinkler Notification Events
 
 **This step is important.**
 
@@ -374,14 +581,15 @@ In the OpenSprinkler web interface:
 
 At minimum, enabling:
 
-* **Station Start**
-* **Station Finish**
+- **Station Start**
+- **Station Finish**
 
 is recommended for `ospiLCD-mqtt`.
 
 Other notification events may also be enabled if desired.
 
 If no Notification Events are selected, MQTT may still appear to be working.
+
 For example, you may receive:
 
 ```text
@@ -395,32 +603,44 @@ refresh, but the update will not be immediate.
 
 ---
 
-# 8. Test ospiLCD-mqtt interactively
+# 9. Test ospiLCD-mqtt interactively
 
 Before enabling the systemd service, run the program manually.
 
-From the project directory:
+If the service is already running, stop it first:
+
+```bash
+sudo systemctl stop ospilcd
+```
+
+Then, from the project directory:
 
 ```bash
 source .venv/bin/activate
 python ospiLCD-mqtt.py
 ```
 
-A successful connection should produce output similar to:
+A successful named-mode connection may produce terminal output similar to:
 
 ```text
 [Connected with result code Success]
 Msg:opensprinkler/availability: b'online'
-15:47:09 Wed 08-19
-MC:________
-Water level:128%
-192.168.1.100
+09:33:28 Sun 08-23
+System idle
+Water level: 129%
+OSPi.example.tld
 ```
 
-The exact values will depend on your controller and network.
+The exact values will depend on your controller and configuration.
 
-The clock on the physical LCD should update every second even though the
-terminal does not print a line every second.
+The physical LCD contains locally updated information that is not continuously
+printed to the terminal.
+
+For example:
+
+- the clock changes locally;
+- the named-mode remaining-time countdown changes locally;
+- long station names scroll locally.
 
 The full controller state is refreshed approximately every 30 seconds.
 
@@ -436,7 +656,7 @@ The program should exit cleanly.
 
 ---
 
-# 9. Test MQTT station notifications
+# 10. Test MQTT station notifications
 
 Start a station manually from the OpenSprinkler interface.
 
@@ -447,26 +667,45 @@ immediately receive an event similar to:
 Msg:opensprinkler/station/1: b'{"state":1,"duration":60}'
 ```
 
-The display should then immediately show the running station and remaining
-watering time.
-
-For example:
+In named mode, the display should immediately change to something similar to:
 
 ```text
-MC:_2______
-Water level:128%
-Rt:0:01:00 h:m:s
+09:33:50 Sun 08-23
+Backyard/Garden
+Remaining: 1:00
+OSPi.example.tld
 ```
 
-When the station finishes, another MQTT message should trigger an immediate
-return to the idle display.
+The countdown on the physical LCD should then decrease locally each second.
+
+A later synchronization may produce terminal output such as:
+
+```text
+09:33:58 Sun 08-23
+Backyard/Garden
+Remaining: 0:52
+OSPi.example.tld
+```
+
+The absence of terminal output every second is normal. The live countdown does
+not require an API request or terminal message every second.
+
+When the station finishes, the MQTT station-finish message should trigger an
+immediate return to the idle display:
+
+```text
+09:34:50 Sun 08-23
+System idle
+Water level: 129%
+OSPi.example.tld
+```
 
 The 30-second refresh continues to operate as a fallback even when MQTT is
 working correctly.
 
 ---
 
-# 10. Start the systemd service
+# 11. Start the systemd service
 
 Once interactive testing is successful:
 
@@ -512,7 +751,7 @@ sudo systemctl enable --now ospilcd
 
 ---
 
-# 11. Startup behavior
+# 12. Startup behavior
 
 On an OSPi installation, OpenSprinkler and `ospiLCD-mqtt` may start at nearly
 the same time during boot.
@@ -538,78 +777,16 @@ An invalid OpenSprinkler password is handled differently. Authentication
 failures are not repeatedly retried because they require a configuration
 change.
 
----
-
-# 12. Display behavior
-
-The display is designed to provide useful information without continuously
-querying OpenSprinkler.
-
-## Clock
-
-The first row displays the Raspberry Pi's local time and date.
-
-The clock is updated locally every second.
-
-This update:
-
-* does not query the OpenSprinkler API;
-* does not require MQTT;
-* does not wake the LCD backlight.
-
-## Controller status
-
-The main controller row displays station activity.
-
-For example:
-
-```text
-MC:________
-```
-
-indicates no active stations.
-
-A running station may appear as:
-
-```text
-MC:_2______
-```
-
-Master stations and certain controller features may be represented by special
-characters.
-
-## Water level
-
-When no expansion board is present, another row displays the current
-OpenSprinkler water level:
-
-```text
-Water level:128%
-```
-
-Values above 100% are valid. OpenSprinkler's weather adjustment can increase
-watering time above the programmed baseline when conditions call for
-additional watering.
-
-## Remaining watering time
-
-When a station is active, the bottom row displays total remaining watering
-time:
-
-```text
-Rt:0:01:53 h:m:s
-```
-
-## IP address
-
-When no watering program is active, the bottom row normally displays the
-Raspberry Pi's IP address.
+If OpenSprinkler and `ospiLCD-mqtt` are running on the same Raspberry Pi, the
+installed systemd service can also be ordered after the OpenSprinkler service.
+The application's own retry handling remains useful because a started process
+does not necessarily mean that the HTTP API is ready to answer requests.
 
 ---
 
 # 13. How updates work
 
-The normal update flow is:
+The normal controller-update flow is:
 
 ```text
 OpenSprinkler event
@@ -623,7 +800,7 @@ OpenSprinkler event
         |
         | OpenSprinkler JSON API
         v
-   Current controller state
+ Current controller state
         |
         v
        LCD
@@ -633,19 +810,37 @@ MQTT provides the notification that something changed.
 
 The OpenSprinkler API provides the current authoritative state.
 
+Between controller updates, several display functions are maintained locally:
+
+```text
+Raspberry Pi system clock
+        |
+        +----> LCD clock
+
+Active-station run time
+        |
+        +----> local countdown ----> LCD remaining time
+
+OpenSprinkler station name
+        |
+        +----> local scroller -----> LCD station name
+```
+
 Separately:
 
 ```text
-Every second
-    -> update LCD clock only
+MQTT event
+    -> query OpenSprinkler
+    -> synchronize display state
 
 Every 30 seconds
     -> query OpenSprinkler
-    -> synchronize LCD state
+    -> synchronize display state
 ```
 
-This design provides immediate event-driven updates while retaining a periodic
-fallback.
+This design provides immediate event-driven updates, locally responsive display
+behavior, and a periodic synchronization fallback without unnecessary
+continuous API polling.
 
 ---
 
@@ -709,6 +904,78 @@ device.
 
 ---
 
+## Backlight turns completely off
+
+Many common HD44780 I2C backpacks provide only backlight on/off control.
+
+If:
+
+```ini
+auto_backlight_off = true
+```
+
+the backlight may therefore become completely dark when the timeout expires
+rather than becoming partially dimmer.
+
+If you want the backlight continuously illuminated, use:
+
+```ini
+auto_backlight_off = false
+```
+
+---
+
+## Named display does not appear
+
+Verify:
+
+```ini
+[Display]
+mode = named
+```
+
+in `ospilcd.ini`.
+
+The default/example configuration may use classic mode for compatibility with
+the earlier display layout.
+
+Restart the application after changing the configuration.
+
+---
+
+## Long station name is truncated in terminal output
+
+The physical LCD and terminal output do not necessarily show every local
+display update.
+
+Long-name scrolling is performed locally by the live display thread.
+
+The full OpenSprinkler refresh may initially print the station name to the
+terminal while the LCD subsequently scrolls it without generating additional
+terminal messages.
+
+---
+
+## Countdown does not print every second in the terminal
+
+This is expected.
+
+The named-mode countdown is maintained locally on the Raspberry Pi between
+OpenSprinkler synchronization events.
+
+The LCD can therefore show:
+
+```text
+Remaining: 0:59
+Remaining: 0:58
+Remaining: 0:57
+```
+
+without making three additional API requests or printing three additional
+status blocks to the terminal.
+
+---
+
 ## OpenSprinkler authentication failed
 
 If the display or log reports:
@@ -754,10 +1021,10 @@ Verify the MQTT configuration in the OpenSprinkler web interface.
 
 Check:
 
-* Broker hostname or IP address
-* Port
-* Username
-* Password
+- Broker hostname or IP address
+- Port
+- Username
+- Password
 
 Remember that the MQTT credentials used by `ospiLCD-mqtt` come from
 OpenSprinkler's configuration.
@@ -773,8 +1040,8 @@ First verify that OpenSprinkler Notification Events are enabled.
 
 At minimum, enable:
 
-* Station Start
-* Station Finish
+- Station Start
+- Station Finish
 
 If the Mosquitto command-line clients are installed, MQTT traffic can be
 observed directly:
@@ -853,7 +1120,7 @@ ospilcd.ini
     Local configuration. Not tracked by Git.
 
 hashpass.py
-    Utility for generating the OpenSprinkler password MD5 hash.
+    Utility for interactively generating the OpenSprinkler password MD5 hash.
 
 requirements.txt
     Python dependencies installed into the virtual environment.
@@ -861,6 +1128,9 @@ requirements.txt
 install.sh
     Installation helper that prepares the Python environment and systemd
     service.
+
+Case/
+    3D-printable enclosure files, source models, artwork, and documentation.
 
 .gitattributes
     Repository line-ending configuration.
@@ -878,17 +1148,24 @@ install.sh
 
 Do not commit:
 
-* OpenSprinkler credentials
-* MQTT passwords
-* private network credentials
-* other installation-specific secrets
+- OpenSprinkler credentials
+- MQTT passwords
+- private network credentials
+- other installation-specific secrets
+
+`hashpass.py` prompts for the OpenSprinkler password rather than requiring the
+password to be written into the Python source file.
+
+The generated MD5 value is the value required by the OpenSprinkler API. It
+should not be treated as a modern password-storage mechanism or as a substitute
+for protecting access to the controller and its configuration.
 
 When posting logs or screenshots publicly, review them for passwords and other
 sensitive information before sharing them.
 
 ---
 
-## Project History and Credits
+# Project History and Credits
 
 This project builds upon the work of earlier OpenSprinkler LCD projects.
 
@@ -911,17 +1188,29 @@ OpenSprinkler, MQTT, and systemd environments.
 
 Among the changes in the current version are:
 
-* Python 3 modernization and refactoring.
-* Current Eclipse Paho MQTT API support.
-* Separation of local configuration from program code.
-* Python virtual-environment and dependency management.
-* Portable systemd installation without assuming a `pi` username or fixed
+- Python 3 modernization and refactoring.
+- Current Eclipse Paho MQTT API support.
+- Separation of local configuration from program code.
+- Interactive password-hash generation without storing the plain-text
+  OpenSprinkler password in the utility source.
+- Python virtual-environment and dependency management.
+- Portable systemd installation without assuming a `pi` username or fixed
   installation directory.
-* Event-driven OpenSprinkler updates with periodic synchronization.
-* A locally updated once-per-second clock without continuous API polling.
-* Improved LCD backlight handling.
-* OpenSprinkler startup retry and error handling.
-* Installation and troubleshooting improvements.
+- Event-driven OpenSprinkler updates with periodic synchronization.
+- Locally maintained clock information without continuous API polling.
+- Selectable classic and named display layouts.
+- Human-readable OpenSprinkler station names.
+- Automatic scrolling of station names longer than the LCD width.
+- Locally maintained active-station countdown in named mode.
+- Configurable LCD footer.
+- Configurable automatic backlight shutoff.
+- OpenSprinkler startup retry and authentication/error handling.
+- Installation and troubleshooting improvements.
+
+The **classic display mode** intentionally retains concepts and behavior derived
+from the earlier projects. The newer **named display mode** builds on that work
+while providing a different, more human-readable presentation of the same
+OpenSprinkler controller state.
 
 Thanks to the original contributors whose work made this version possible, as
 well as the developers of **OpenSprinkler**, **RPLCD**, and **Eclipse Paho
