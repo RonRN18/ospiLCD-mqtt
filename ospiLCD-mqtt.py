@@ -134,10 +134,12 @@ api_url = f"http://{osAddress}:{osPort}/ja?pw={md5hash}"
 
 lcd = None
 backlight_timer = None
+named_countdown_deadline = None
 
 lcd_lock = threading.Lock()
 update_lock = threading.Lock()
 timer_lock = threading.Lock()
+countdown_lock = threading.Lock()
 
 stop_event = threading.Event()
 error_active = threading.Event()
@@ -547,6 +549,36 @@ def get_active_station(ja):
     return None, None
 
 
+def get_active_station_remaining_time(ja):
+    """
+    Return the remaining run time for the first active station.
+
+    Return zero when no active station or remaining-time value
+    is available.
+    """
+    station_number, _station_name = get_active_station(ja)
+
+    if station_number is None:
+        return 0
+
+    program_status = ja.get("program_status") or []
+    station_index = station_number - 1
+
+    if station_index >= len(program_status):
+        return 0
+
+    station_program = program_status[station_index]
+
+    if not station_program or len(station_program) < 2:
+        return 0
+
+    try:
+        return max(0, int(station_program[1]))
+
+    except (TypeError, ValueError):
+        return 0
+
+
 def format_remaining_time(total_time):
     """
     Convert seconds into hours, minutes, and seconds.
@@ -566,6 +598,53 @@ def format_remaining_time(total_time):
         remaining_minutes,
         remaining_seconds,
     )
+
+
+def synchronize_named_countdown(remaining_time):
+    """
+    Synchronize the local named-display countdown with OpenSprinkler.
+    """
+    global named_countdown_deadline
+
+    with countdown_lock:
+        if remaining_time > 0:
+            named_countdown_deadline = time.monotonic() + remaining_time
+        else:
+            named_countdown_deadline = None
+
+
+def get_live_named_remaining_time():
+    """
+    Calculate the locally maintained remaining watering time.
+
+    Return None when no named-display countdown is active.
+    """
+    with countdown_lock:
+        deadline = named_countdown_deadline
+
+    if deadline is None:
+        return None
+
+    remaining_time = deadline - time.monotonic()
+
+    if remaining_time <= 0:
+        return 0
+
+    # Round upward so a newly synchronized 60-second run initially
+    # displays 1:00 rather than immediately dropping to 0:59.
+    return int(remaining_time + 0.999)
+
+
+def format_named_remaining_line(total_time):
+    """
+    Format the named-display remaining-time row.
+    """
+    hours, minutes, seconds = format_remaining_time(total_time)
+
+    if hours > 0:
+        return f"Remaining: {hours}:{minutes:02d}:{seconds:02d}"
+
+    return f"Remaining: {minutes}:{seconds:02d}"
 
 
 def build_classic_display_lines(
@@ -624,13 +703,7 @@ def build_named_display_lines(
 
     if station_number is not None:
         line2 = station_name
-
-        hours, minutes, seconds = format_remaining_time(total_time)
-
-        if hours > 0:
-            line3 = f"Remaining: {hours}:{minutes:02d}:{seconds:02d}"
-        else:
-            line3 = f"Remaining: {minutes}:{seconds:02d}"
+        line3 = format_named_remaining_line(total_time)
 
     else:
         line2 = "System idle"
@@ -681,30 +754,30 @@ def write_display(lines, wake=True):
 
 def update_display(wake=True):
     """
-    Query OpenSprinkler and refresh the LCD status display.
+    Query OpenSprinkler and refresh the selected LCD status layout.
     """
     with update_lock:
         ja = get_data()
-
         net_ip = get_network_ip()
 
-        main_status = build_main_controller_status(
-            ja,
-            network_connected=(net_ip is not None),
-        )
-
-        expansion_status = build_expansion_status(ja)
-
-        total_time = calculate_remaining_time(ja["program_status"])
-
         if display_mode == "named":
+            active_remaining_time = get_active_station_remaining_time(ja)
+            synchronize_named_countdown(active_remaining_time)
+
             lines = build_named_display_lines(
                 ja,
                 net_ip,
-                total_time,
+                active_remaining_time,
             )
 
         else:
+            main_status = build_main_controller_status(
+                ja,
+                network_connected=(net_ip is not None),
+            )
+            expansion_status = build_expansion_status(ja)
+            total_time = calculate_remaining_time(ja["program_status"])
+
             lines = build_classic_display_lines(
                 ja,
                 main_status,
@@ -716,8 +789,8 @@ def update_display(wake=True):
         print_display_lines(lines)
         write_display(lines, wake=wake)
 
-        # Do not allow the one-second clock to overwrite an error
-        # message until a complete successful display refresh occurs.
+        # Do not allow live updates to overwrite an error message until
+        # a complete successful display refresh occurs.
         error_active.clear()
 
 
@@ -739,28 +812,51 @@ def safe_update_display(wake=True):
         return False
 
 
-######################### Clock Thread #########################
+######################### Live Display Thread #########################
 
 
-def update_clock():
+def write_live_display_rows():
     """
-    Update only LCD row 1 once per second.
+    Write locally maintained LCD rows without querying OpenSprinkler.
 
-    No OpenSprinkler API or MQTT request is performed.
+    Row 1 always receives the current local clock. In named mode,
+    row 3 also receives the locally maintained watering countdown
+    while a countdown is active.
+    """
+    with lcd_lock:
+        lcd.cursor_pos = (0, 0)
+        lcd.write_string(format_lcd_line(format_clock_line()))
 
-    Clock updates pause while an error message is being displayed.
+        if display_mode != "named":
+            return
+
+        remaining_time = get_live_named_remaining_time()
+
+        if remaining_time is None:
+            return
+
+        lcd.cursor_pos = (2, 0)
+        lcd.write_string(
+            format_lcd_line(
+                format_named_remaining_line(remaining_time)
+            )
+        )
+
+
+def update_live_display():
+    """
+    Refresh locally maintained LCD information once per second.
+
+    No OpenSprinkler API or MQTT request is performed. Live updates
+    pause while an error message is being displayed.
     """
     while not stop_event.is_set():
         try:
             if not error_active.is_set():
-                line1 = format_clock_line()
-
-                with lcd_lock:
-                    lcd.cursor_pos = (0, 0)
-                    lcd.write_string(format_lcd_line(line1))
+                write_live_display_rows()
 
         except Exception as e:
-            print(f"Clock update failed: {e}")
+            print(f"Live display update failed: {e}")
 
         # Synchronize approximately to the start of each second.
         delay = 1.0 - (time.time() % 1.0)
@@ -1152,7 +1248,7 @@ def initialize_mqtt(ja):
 
 def start_background_threads():
     """
-    Start the periodic refresh and live-clock threads.
+    Start the periodic refresh and live-display threads.
     """
     refresh_thread = threading.Thread(
         target=periodic_refresh,
@@ -1162,13 +1258,13 @@ def start_background_threads():
 
     refresh_thread.start()
 
-    clock_thread = threading.Thread(
-        target=update_clock,
+    live_display_thread = threading.Thread(
+        target=update_live_display,
         daemon=True,
-        name="lcd-clock",
+        name="live-display",
     )
 
-    clock_thread.start()
+    live_display_thread.start()
 
 
 def run_mqtt_loop(mqtt_client):
