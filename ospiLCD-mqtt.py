@@ -92,6 +92,33 @@ backlight_timeout = config.getfloat(
     fallback=60.0,
 )
 
+display_mode = (
+    config.get(
+        "Display",
+        "mode",
+        fallback="classic",
+    )
+    .strip()
+    .lower()
+)
+
+display_footer = config.get(
+    "Display",
+    "footer",
+    fallback="",
+).strip()
+
+auto_backlight_off = config.getboolean(
+    "Display",
+    "auto_backlight_off",
+    fallback=True,
+)
+
+if display_mode not in ("classic", "named"):
+    raise ValueError(
+        "Invalid Display mode in ospilcd.ini. " "Use 'classic' or 'named'."
+    )
+
 date_locale = config.get(
     "Regional",
     "locale",
@@ -106,7 +133,7 @@ api_url = f"http://{osAddress}:{osPort}/ja?pw={md5hash}"
 ######################### Globals #########################
 
 lcd = None
-dim_timer = None
+backlight_timer = None
 
 lcd_lock = threading.Lock()
 update_lock = threading.Lock()
@@ -153,23 +180,24 @@ def reset_backlight_timer():
     """
     Restart the timer that turns off the LCD backlight.
 
-    A timeout of zero or less leaves the backlight on indefinitely.
+    When automatic backlight shutoff is disabled, the backlight
+    remains on indefinitely.
     """
-    global dim_timer
+    global backlight_timer
 
     with timer_lock:
-        if dim_timer is not None:
-            dim_timer.cancel()
+        if backlight_timer is not None:
+            backlight_timer.cancel()
 
-        dim_timer = None
+        backlight_timer = None
 
-        if backlight_timeout > 0:
-            dim_timer = Timer(
+        if auto_backlight_off and backlight_timeout > 0:
+            backlight_timer = Timer(
                 backlight_timeout,
-                dim_backlight,
+                turn_off_backlight,
             )
-            dim_timer.daemon = True
-            dim_timer.start()
+            backlight_timer.daemon = True
+            backlight_timer.start()
 
 
 def wake_backlight():
@@ -182,27 +210,27 @@ def wake_backlight():
     reset_backlight_timer()
 
 
-def dim_backlight():
+def turn_off_backlight():
     """
     Turn off the LCD backlight when its timeout expires.
     """
     with lcd_lock:
         lcd.backlight_enabled = False
 
-    print("[Backlight dimmed.]")
+    print("[Backlight off.]")
 
 
 def signal_handler(_sig, _frame):
     """
     Cleanly shut down on Ctrl+C or systemd service stop.
     """
-    global dim_timer
+    global backlight_timer
 
     stop_event.set()
 
     with timer_lock:
-        if dim_timer is not None:
-            dim_timer.cancel()
+        if backlight_timer is not None:
+            backlight_timer.cancel()
 
     with lcd_lock:
         if lcd is not None:
@@ -894,7 +922,8 @@ def create_mqtt_client(ja):
             wake=True,
         )
 
-        raise RuntimeError("OpenSprinkler MQTT broker configuration is incomplete.")
+        raise RuntimeError(
+            "OpenSprinkler MQTT broker configuration is incomplete.")
 
     mqtt_client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -918,7 +947,8 @@ def create_mqtt_client(ja):
         )
 
     except (OSError, ValueError) as e:
-        print(f"Unable to connect to MQTT broker " f"{mqtt_address}:{mqtt_port}: {e}")
+        print(
+            f"Unable to connect to MQTT broker " f"{mqtt_address}:{mqtt_port}: {e}")
 
         show_error(
             "MQTT broker",

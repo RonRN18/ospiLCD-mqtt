@@ -32,8 +32,27 @@ i2c_address = 0x27
 columns = 20
 rows = 4
 
-# Number of seconds to leave the LCD backlight on after an update.
+# Number of seconds to leave the LCD backlight on after an update
+# when automatic backlight shutoff is enabled.
 backlight_timeout = 60
+
+
+[Display]
+
+# Display layout:
+#   classic = original compact controller-status display
+#   named   = human-readable station-name display
+mode = classic
+
+# Optional fixed text for LCD row 4.
+# If left blank, the Raspberry Pi IPv4 address will be displayed.
+footer =
+
+# If true, the backlight turns off after backlight_timeout seconds
+# without an event that wakes the display.
+#
+# If false, the backlight remains on continuously.
+auto_backlight_off = true
 
 
 [Regional]
