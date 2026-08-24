@@ -1,8 +1,5 @@
 # ospiLCD-mqtt
 
-> **Development branch:** This README describes the `named-display` branch.
-> The new named layout and scrolling behavior are under active testing before
-> being merged into `master`.
 
 `ospiLCD-mqtt` displays the current status of an
 [OpenSprinkler](https://opensprinkler.com/) controller on an I2C character LCD
